@@ -55,8 +55,7 @@ function referentsOf(refs: SecretRefEntry[], ref: string): string[] {
 // presetLitellmProvider maps a preset id to the litellm_provider value
 // its models are filed under in the synced catalog, mirroring
 // catalog.CandidateProviders' driver/host mapping for this fixed set
-// of presets. '' means no restriction, same as an unrecognized
-// driver/host server-side.
+// of presets. '' means no restriction.
 function presetLitellmProvider(presetId: string): string {
   return {
     openrouter: 'openrouter',
@@ -148,8 +147,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   // Live type-ahead over this preset's catalog rows, keyed on the
   // typed model id, presetLitellmProvider mirrors the gateway's
   // catalog.CandidateProviders mapping for the fixed set of presets
-  // this form offers; an unmapped preset searches the whole catalog,
-  // same as an unrecognized driver/host does server-side.
+  // this form offers; an unmapped preset searches the whole catalog.
   const catalogSearch = useCallback(
     (q: string) => (preset ? searchCatalog(q, presetLitellmProvider(preset.id)) : Promise.resolve([])),
     [preset],
