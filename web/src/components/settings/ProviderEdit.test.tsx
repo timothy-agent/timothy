@@ -802,6 +802,8 @@ describe('ProviderEdit models panel', () => {
     expect(screen.getByText('300k ctx')).toBeInTheDocument()
     expect(screen.getByText('house-model')).toBeInTheDocument()
     expect(screen.getByText('unpriced')).toBeInTheDocument()
+    expect(screen.getAllByText('unknown')).toHaveLength(2)
+    expect(screen.queryByText('operator')).not.toBeInTheDocument()
 
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
@@ -844,6 +846,181 @@ describe('ProviderEdit models panel', () => {
     expect(screen.getByText('amazon.nova-lite-v1:0')).toBeInTheDocument()
     expect(screen.queryByText('anthropic.claude-x')).not.toBeInTheDocument()
     expect(availableModels).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ProviderEdit model prices', () => {
+  const pricedProvider: AdminProvider = {
+    ...openaicompatProvider,
+    options: {
+      request_timeout: '5m',
+      prices_by_model: '{"qwen3":{"input_per_mtok":0.1,"output_per_mtok":0.2,"cache_read_per_mtok":0.01},"unlisted":{"input_per_mtok":1,"output_per_mtok":2}}',
+    },
+  }
+  const listed = [
+    { id: 'qwen3', source: 'live' as const, input_per_mtok: 0.1, output_per_mtok: 0.2, price_source: 'operator' as const },
+    { id: 'llama3.3', source: 'live' as const, input_per_mtok: 0.3, output_per_mtok: 0.4, price_source: 'listing' as const },
+    { id: 'glm-4.7', source: 'live' as const, input_per_mtok: 0.5, output_per_mtok: 0.6, price_source: 'catalog' as const },
+    { id: 'house-model', source: 'live' as const },
+  ]
+
+  function row(id: string): HTMLElement {
+    return screen.getByText(id, { selector: 'td' }).closest('tr')!
+  }
+
+  function lastPricesByModel(): unknown {
+    const [, patch] = vi.mocked(patchProvider).mock.calls.at(-1)!
+    return JSON.parse(patch.options!.prices_by_model!)
+  }
+
+  beforeEach(() => {
+    vi.mocked(listProviders).mockResolvedValue([pricedProvider])
+    vi.mocked(availableModels).mockResolvedValue(listed)
+    vi.mocked(patchProvider).mockResolvedValue()
+  })
+
+  it('labels each price with its source, unknown when none', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    expect(row('qwen3')).toHaveTextContent('operator')
+    expect(row('llama3.3')).toHaveTextContent('listing')
+    expect(row('glm-4.7')).toHaveTextContent('catalog')
+    expect(row('house-model')).toHaveTextContent('unpriced unknown')
+    expect(row('unlisted')).toHaveTextContent('in $1 · out $2 /MTok operator')
+  })
+
+  it('saves an edited price into prices_by_model, keeping other options and entry keys', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for qwen3' }))
+    expect(screen.getByLabelText('Input $ / MTok')).toHaveValue('0.1')
+    fireEvent.change(screen.getByLabelText('Input $ / MTok'), { target: { value: '0.5' } })
+    fireEvent.change(screen.getByLabelText('Output $ / MTok'), { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    const [id, patch] = vi.mocked(patchProvider).mock.calls[0]
+    expect(id).toBe('p2')
+    expect(Object.keys(patch)).toEqual(['options'])
+    expect(patch.options?.request_timeout).toBe('5m')
+    expect(lastPricesByModel()).toEqual({
+      qwen3: { input_per_mtok: 0.5, output_per_mtok: 1.5, cache_read_per_mtok: 0.01 },
+      unlisted: { input_per_mtok: 1, output_per_mtok: 2 },
+    })
+  })
+
+  it('refetches the model list when the saved prices change', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...pricedProvider, options: { ...pricedProvider.options, prices_by_model: '{"house-model":{"input_per_mtok":1,"output_per_mtok":1}}' } },
+    ])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for house-model' }))
+    fireEvent.change(screen.getByLabelText('Input $ / MTok'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('Output $ / MTok'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+
+    await waitFor(() => expect(availableModels).toHaveBeenCalledTimes(2))
+    expect(screen.queryByRole('button', { name: 'Save price' })).not.toBeInTheDocument()
+  })
+
+  it('shows validation errors inline and does not save', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for house-model' }))
+    fireEvent.change(screen.getByLabelText('Input $ / MTok'), { target: { value: '-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+
+    expect(await screen.findByText('Cannot be negative.')).toBeInTheDocument()
+    expect(screen.getByText('Enter a price.')).toBeInTheDocument()
+    expect(patchProvider).not.toHaveBeenCalled()
+  })
+
+  it('shows a rejected save inline', async () => {
+    vi.mocked(patchProvider).mockRejectedValue(new Error('options.prices_by_model "x": input_per_mtok is negative (-1)'))
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for house-model' }))
+    fireEvent.change(screen.getByLabelText('Input $ / MTok'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('Output $ / MTok'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+
+    expect(await screen.findByText(/Could not save price: .*is negative/)).toBeInTheDocument()
+  })
+
+  it('clears an operator price, dropping only that model', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for house-model' }))
+    expect(screen.queryByRole('button', { name: 'Clear price' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for qwen3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear price' }))
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    expect(lastPricesByModel()).toEqual({ unlisted: { input_per_mtok: 1, output_per_mtok: 2 } })
+  })
+
+  it('deletes prices_by_model when the last operator price is cleared', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      { ...openaicompatProvider, options: { prices_by_model: '{"qwen3":{"input_per_mtok":0.1,"output_per_mtok":0.2}}' } },
+    ])
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit price for qwen3' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear price' }))
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
+  })
+
+  it('adds a price for a typed model id that is not listed', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add price' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+    expect(await screen.findByText('Enter a model id.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/^Model id/), { target: { value: ' private-model ' } })
+    fireEvent.change(screen.getByLabelText(/^Input \$ \/ MTok/), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText(/^Output \$ \/ MTok/), { target: { value: '8' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save price' }))
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    expect(lastPricesByModel()).toMatchObject({ 'private-model': { input_per_mtok: 2, output_per_mtok: 8 } })
+  })
+
+  it('marks every listed model without an operator price free and says so', async () => {
+    renderPage('p2')
+    await screen.findByText('house-model')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mark listed models free' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark free' }))
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    expect(lastPricesByModel()).toEqual({
+      qwen3: { input_per_mtok: 0.1, output_per_mtok: 0.2, cache_read_per_mtok: 0.01 },
+      unlisted: { input_per_mtok: 1, output_per_mtok: 2 },
+      'llama3.3': { input_per_mtok: 0, output_per_mtok: 0 },
+      'glm-4.7': { input_per_mtok: 0, output_per_mtok: 0 },
+      'house-model': { input_per_mtok: 0, output_per_mtok: 0 },
+    })
+    expect(await screen.findByText('Marked 3 listed models free.')).toBeInTheDocument()
+  })
+
+  it('disables "Mark listed models free" when every listed model has an operator price', async () => {
+    vi.mocked(availableModels).mockResolvedValue([listed[0]])
+    renderPage('p2')
+    await screen.findByText('unlisted')
+
+    expect(screen.getByRole('button', { name: 'Mark listed models free' })).toBeDisabled()
   })
 })
 

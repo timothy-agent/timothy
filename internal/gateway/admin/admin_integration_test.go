@@ -1598,3 +1598,74 @@ func oaiWriteSSE(w http.ResponseWriter, data string) {
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 	w.(http.Flusher).Flush()
 }
+
+// TestPatchPricesByModelRoundTrip covers the provider page's price
+// editor write path: options.prices_by_model goes in through Patch with
+// the rest of the options map, reads back unchanged and prices the
+// serving snapshot; an invalid price is refused and leaves the row as
+// it was; dropping the key removes the operator prices.
+func TestPatchPricesByModelRoundTrip(t *testing.T) {
+	adm, store, _ := testAdmin(t)
+	ctx := t.Context()
+
+	name := adminMarker + "prices"
+	id, err := adm.Create(ctx, Provider{
+		Name: name, Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
+		CredentialRef: "SOME_ENV_NAME", ExcludeFromBootstrap: true,
+		Options: map[string]string{"request_timeout": "5m"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	priced := map[string]string{
+		"request_timeout": "5m",
+		"prices_by_model": `{"m1":{"input_per_mtok":1.5,"output_per_mtok":6},"house":{"input_per_mtok":0,"output_per_mtok":0}}`,
+	}
+	if err := adm.Patch(ctx, id, ProviderPatch{Options: &priced}); err != nil {
+		t.Fatalf("Patch prices: %v", err)
+	}
+	assertOptions := func(want map[string]string) {
+		t.Helper()
+		got, err := adm.get(ctx, id)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if !reflect.DeepEqual(got.Options, want) {
+			t.Fatalf("options = %v, want %v", got.Options, want)
+		}
+	}
+	assertOptions(priced)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_ = store.Load(ctx)
+		snap := store.Snapshot()
+		m1, house := snap.Prices(name, "m1"), snap.Prices(name, "house")
+		if m1 != nil && m1.InputPerMTok == 1.5 && m1.OutputPerMTok == 6 && house != nil && *house == (router.ModelPrices{}) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("snapshot prices m1 = %+v, house = %+v, want 1.5/6 and 0/0", m1, house)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	for _, bad := range []string{
+		`{"m1":{"input_per_mtok":-1,"output_per_mtok":6}}`,
+		`[1]`,
+	} {
+		opts := map[string]string{"request_timeout": "5m", "prices_by_model": bad}
+		if err := adm.Patch(ctx, id, ProviderPatch{Options: &opts}); err == nil {
+			t.Fatalf("Patch prices_by_model %s = nil, want error", bad)
+		}
+		assertOptions(priced)
+	}
+
+	cleared := map[string]string{"request_timeout": "5m"}
+	if err := adm.Patch(ctx, id, ProviderPatch{Options: &cleared}); err != nil {
+		t.Fatalf("Patch clear: %v", err)
+	}
+	assertOptions(cleared)
+}
