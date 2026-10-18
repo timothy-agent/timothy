@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -126,7 +127,7 @@ func TestDispatchWithDecide(t *testing.T) {
 	}
 
 	decideReturns := func(choice string, err error) Decide {
-		return func(context.Context, string, string, string, []string) (string, error) { return choice, err }
+		return func(context.Context, string, string, string, []DecideOption) (string, error) { return choice, err }
 	}
 
 	cases := []struct {
@@ -151,7 +152,7 @@ func TestDispatchWithDecide(t *testing.T) {
 			decideCalls, classifyCalls := 0, 0
 			var decide Decide
 			if tc.decide != nil {
-				decide = func(ctx context.Context, kind, question, state string, options []string) (string, error) {
+				decide = func(ctx context.Context, kind, question, state string, options []DecideOption) (string, error) {
 					decideCalls++
 					if kind != "choice" {
 						t.Errorf("kind = %q, want choice", kind)
@@ -159,8 +160,9 @@ func TestDispatchWithDecide(t *testing.T) {
 					if state != "fix race condition" {
 						t.Errorf("state = %q, want message as state", state)
 					}
-					if len(options) != 2 || options[1] != "coding: software engineer" {
-						t.Errorf("options = %v, want rich option labels", options)
+					want := []DecideOption{{ID: "general", Description: "everyday tasks"}, {ID: "coding", Description: "software engineer"}}
+					if !slices.Equal(options, want) {
+						t.Errorf("options = %+v, want %+v", options, want)
 					}
 					return tc.decide(ctx, kind, question, state, options)
 				}
@@ -184,3 +186,31 @@ func TestDispatchWithDecide(t *testing.T) {
 	}
 }
 
+// TestDispatchWithDecideColonName confirms an agent name with a colon
+// goes out as one option id and its exact echo maps back to the agent.
+func TestDispatchWithDecideColonName(t *testing.T) {
+	candidates := []Agent{
+		{ID: "team-id", Name: "team", Description: "team chat"},
+		{ID: "ops-id", Name: "team:ops", Description: "runs deploys: prod"},
+	}
+	for _, tc := range []struct {
+		choice, want string
+	}{
+		{"team:ops", "ops-id"},
+		{"team", "team-id"},
+		{"team:ops: runs deploys: prod", "fallback-id"},
+	} {
+		var got []DecideOption
+		decide := func(_ context.Context, _, _, _ string, options []DecideOption) (string, error) {
+			got = options
+			return tc.choice, nil
+		}
+		if id := DispatchWithDecide(context.Background(), decide, nil, "ship it", candidates, "fallback-id"); id != tc.want {
+			t.Fatalf("choice %q: dispatched to %q, want %q", tc.choice, id, tc.want)
+		}
+		want := []DecideOption{{ID: "team", Description: "team chat"}, {ID: "team:ops", Description: "runs deploys: prod"}}
+		if !slices.Equal(got, want) {
+			t.Fatalf("options = %+v, want %+v", got, want)
+		}
+	}
+}
