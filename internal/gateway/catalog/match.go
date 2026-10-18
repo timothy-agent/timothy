@@ -8,8 +8,9 @@ import (
 
 // CandidateProviders maps a provider row's driver (+ base_url for
 // openaicompat) to the litellm_provider value(s) its models could
-// plausibly match against. Empty slice means "no restriction": try
-// every catalog provider.
+// plausibly match against. Empty means no catalog vendor maps: listings
+// and suggestions for the row return nothing, never the whole catalog
+// (D-171).
 func CandidateProviders(driver, baseURL string) []string {
 	switch driver {
 	case "anthropic":
@@ -82,6 +83,23 @@ func cliproxyCandidates(hints []string) []string {
 	}
 }
 
+// CliproxyServes reports whether a cliproxy row hinted by hints (name,
+// default model) serves model id. The proxy lists Claude and OpenAI ids
+// on every row; when hints signal one vendor only that vendor's ids pass
+// (same token rule as cliproxyCandidates). A non-cliproxy baseURL or
+// ambiguous hints keep every id (D-171).
+func CliproxyServes(baseURL string, hints []string, id string) bool {
+	if !isCliproxy(baseURL) {
+		return true
+	}
+	row := cliproxyCandidates(hints)
+	if len(row) != 1 {
+		return true
+	}
+	own := cliproxyCandidates([]string{id})
+	return len(own) == 1 && own[0] == row[0]
+}
+
 func vendorTokens(h string) []string {
 	return strings.FieldsFunc(strings.ToLower(h), func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
@@ -147,7 +165,7 @@ func candidatesForHost(baseURL string) []string {
 	case host == "localhost" || host == "127.0.0.1" || host == "host.docker.internal" || u.Port() == "11434":
 		return []string{"ollama"}
 	default:
-		return nil // no restriction: try every catalog provider
+		return nil // unmapped host: no catalog vendor (D-171)
 	}
 }
 
@@ -207,16 +225,11 @@ type Suggestion struct {
 
 // Suggest matches each of modelIDs against the catalog rows for
 // candidates (a row's candidate litellm_provider(s), typically from
-// CandidateProviders or an admin-layer override of it), falling back
-// to the whole catalog when candidates is nil/empty (no restriction).
+// CandidateProviders or an admin-layer override of it). Empty
+// candidates match nothing, so every suggestion comes back unmatched
+// (D-171).
 func (s *Store) Suggest(ctx context.Context, candidates []string, modelIDs []string) ([]Suggestion, error) {
-	var pool []Model
-	var err error
-	if len(candidates) == 0 {
-		pool, err = s.allProviders(ctx)
-	} else {
-		pool, err = s.byProvider(ctx, candidates)
-	}
+	pool, err := s.byProvider(ctx, candidates)
 	if err != nil {
 		return nil, err
 	}

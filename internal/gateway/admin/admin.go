@@ -1467,7 +1467,24 @@ func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.Avai
 	}
 	lctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
-	return lister.ListModels(lctx)
+	models, err := lister.ListModels(lctx)
+	if err != nil {
+		return nil, err
+	}
+	return cliproxyVendorModels(p, models), nil
+}
+
+// cliproxyVendorModels keeps only the ids a cliproxy row's vendor
+// serves (catalog.CliproxyServes); other rows pass through unchanged.
+func cliproxyVendorModels(p Provider, models []provider.AvailableModel) []provider.AvailableModel {
+	hints := []string{p.Name, p.DefaultModel}
+	out := make([]provider.AvailableModel, 0, len(models))
+	for _, m := range models {
+		if catalog.CliproxyServes(p.BaseURL, hints, m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // credentialLookup mirrors the router store's resolver: a ref that

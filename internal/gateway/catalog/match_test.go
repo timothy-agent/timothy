@@ -219,3 +219,42 @@ func TestCandidateProvidersForRow(t *testing.T) {
 		})
 	}
 }
+
+func TestCliproxyServes(t *testing.T) {
+	const proxy = "http://cliproxy:8317/v1"
+	claudeRow := []string{"Claude Subscription", "claude-sonnet-4-5"}
+	chatgptRow := []string{"ChatGPT Subscription", "gpt-5"}
+	ambiguous := []string{"Subscriptions", ""}
+
+	cases := []struct {
+		name    string
+		baseURL string
+		hints   []string
+		id      string
+		want    bool
+	}{
+		{"claude row keeps claude", proxy, claudeRow, "claude-opus-4-1", true},
+		{"claude row drops gpt", proxy, claudeRow, "gpt-5", false},
+		{"claude row drops o3", proxy, claudeRow, "o3", false},
+		{"claude row drops codex", proxy, claudeRow, "codex-auto-review", false},
+		{"claude row drops gpt-image", proxy, claudeRow, "gpt-image-1", false},
+		{"chatgpt row keeps gpt", proxy, chatgptRow, "gpt-5", true},
+		{"chatgpt row keeps o3", proxy, chatgptRow, "o3", true},
+		{"chatgpt row keeps codex", proxy, chatgptRow, "codex-auto-review", true},
+		{"chatgpt row keeps gpt-image", proxy, chatgptRow, "gpt-image-1", true},
+		{"chatgpt row drops claude", proxy, chatgptRow, "claude-sonnet-4-5", false},
+		{"chatgpt row drops unsignalled id", proxy, chatgptRow, "gemini-2.5-pro", false},
+		{"port 8317 counts as cliproxy", "http://127.0.0.1:8317/v1", chatgptRow, "claude-sonnet-4-5", false},
+		{"ambiguous row keeps claude", proxy, ambiguous, "claude-sonnet-4-5", true},
+		{"ambiguous row keeps gpt", proxy, ambiguous, "gpt-5", true},
+		{"conflicting hints keep everything", proxy, []string{"Claude Subscription", "gpt-5"}, "gpt-5", true},
+		{"non-cliproxy row untouched", "https://api.openai.com/v1", chatgptRow, "claude-sonnet-4-5", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CliproxyServes(tc.baseURL, tc.hints, tc.id); got != tc.want {
+				t.Fatalf("CliproxyServes(%q, %v, %q) = %v, want %v", tc.baseURL, tc.hints, tc.id, got, tc.want)
+			}
+		})
+	}
+}
