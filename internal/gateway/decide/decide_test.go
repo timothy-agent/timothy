@@ -22,8 +22,7 @@ func TestValidate(t *testing.T) {
 		{"choice needs two options", provider.DecideRequest{Kind: "choice", Question: "q", Options: []string{"only"}}, "at least two", nil},
 		{"yesno gets the fixed pair", provider.DecideRequest{Kind: "yesno", Question: "q"}, "", []string{"yes", "no"}},
 		{"yesno rejects options", provider.DecideRequest{Kind: "yesno", Question: "q", Options: []string{"yes"}}, "takes no options", nil},
-		{"score has no options", provider.DecideRequest{Kind: "score", Question: "q"}, "", nil},
-		{"score rejects options", provider.DecideRequest{Kind: "score", Question: "q", Options: []string{"a", "b"}}, "takes no options", nil},
+		{"score is an unknown kind", provider.DecideRequest{Kind: "score", Question: "q"}, `unknown kind "score"`, nil},
 		{"unknown kind", provider.DecideRequest{Kind: "rank", Question: "q"}, `unknown kind "rank"`, nil},
 		{"empty question", provider.DecideRequest{Kind: "yesno", Question: "  "}, "question is required", nil},
 	}
@@ -52,31 +51,24 @@ func TestParse(t *testing.T) {
 	t.Parallel()
 	choice := provider.DecideRequest{Kind: "choice", Options: []string{"coding", "research", "general"}}
 	yesno := provider.DecideRequest{Kind: "yesno", Options: []string{"yes", "no"}}
-	score := provider.DecideRequest{Kind: "score"}
 	tests := []struct {
 		name       string
 		req        provider.DecideRequest
 		text       string
 		wantChoice string
-		wantScore  float64
 		malformed  bool
 	}{
-		{"exact option", choice, "research", "research", 0, false},
-		{"case and whitespace", choice, "  Coding\n", "coding", 0, false},
-		{"quoted with period", choice, `"general".`, "general", 0, false},
-		{"markdown bold", choice, "**research**", "research", 0, false},
-		{"prose around the option is malformed", choice, "I think research fits best", "", 0, true},
-		{"two options is malformed", choice, "coding, research", "", 0, true},
-		{"option with id: desc returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding", "coding", 0, false},
-		{"reply with full label returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding: writes code", "coding", 0, false},
-		{"reply with id and colon returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding:", "coding", 0, false},
-		{"yes", yesno, "Yes", "yes", 0, false},
-		{"maybe is malformed", yesno, "maybe", "", 0, true},
-		{"score", score, "0.75", "", 0.75, false},
-		{"score bounds", score, "1.0", "", 1, false},
-		{"score above one is malformed", score, "1.5", "", 0, true},
-		{"score percent is malformed", score, "75%", "", 0, true},
-		{"score prose is malformed", score, "about 0.5", "", 0, true},
+		{"exact option", choice, "research", "research", false},
+		{"case and whitespace", choice, "  Coding\n", "coding", false},
+		{"quoted with period", choice, `"general".`, "general", false},
+		{"markdown bold", choice, "**research**", "research", false},
+		{"prose around the option is malformed", choice, "I think research fits best", "", true},
+		{"two options is malformed", choice, "coding, research", "", true},
+		{"option with id: desc returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding", "coding", false},
+		{"reply with full label returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding: writes code", "coding", false},
+		{"reply with id and colon returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding:", "coding", false},
+		{"yes", yesno, "Yes", "yes", false},
+		{"maybe is malformed", yesno, "maybe", "", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,7 +78,7 @@ func TestParse(t *testing.T) {
 				if !errors.Is(err, ErrMalformed) {
 					t.Fatalf("err = %v, want ErrMalformed", err)
 				}
-				if res.Choice != "" || res.Score != nil {
+				if res.Choice != "" {
 					t.Fatalf("malformed reply produced a result %+v", res)
 				}
 				return
@@ -96,9 +88,6 @@ func TestParse(t *testing.T) {
 			}
 			if res.Choice != tc.wantChoice {
 				t.Fatalf("choice = %q, want %q", res.Choice, tc.wantChoice)
-			}
-			if tc.req.Kind == "score" && (res.Score == nil || *res.Score != tc.wantScore) {
-				t.Fatalf("score = %v, want %v", res.Score, tc.wantScore)
 			}
 		})
 	}
@@ -123,10 +112,6 @@ func TestPromptListsOptions(t *testing.T) {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user prompt %q lacks %q", user, want)
 		}
-	}
-	system, user = Prompt(provider.DecideRequest{Kind: "score", Question: "How relevant?"})
-	if !strings.Contains(system, "between 0 and 1") || strings.Contains(user, "Allowed options") {
-		t.Fatalf("score prompt = %q / %q", system, user)
 	}
 }
 

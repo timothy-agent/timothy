@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
@@ -50,10 +49,6 @@ func Validate(req *provider.DecideRequest) error {
 			return errors.New("decide: a yesno question takes no options")
 		}
 		req.Options = append([]string(nil), yesNo...)
-	case provider.DecideScore:
-		if len(req.Options) != 0 {
-			return errors.New("decide: a score question takes no options")
-		}
 	default:
 		return fmt.Errorf("decide: unknown kind %q", req.Kind)
 	}
@@ -71,11 +66,6 @@ func Prompt(req provider.DecideRequest) (system, user string) {
 		b.WriteString(req.State)
 	}
 	b.WriteString("\n\n")
-	if req.Kind == provider.DecideScore {
-		system = "You are a scorer. Reply with one number between 0 and 1 and nothing else."
-		b.WriteString("Reply with one number between 0 and 1.")
-		return system, b.String()
-	}
 	system = "You are a classifier. Reply with exactly one of the allowed options, spelled as given, and nothing else."
 	b.WriteString("Allowed options:\n")
 	for _, o := range req.Options {
@@ -128,17 +118,10 @@ func ViaChat(ctx context.Context, p provider.Provider, model string, req provide
 
 // Parse maps a chat model's reply onto the request's answer set. A
 // choice must equal one option after trimming whitespace, quotes,
-// emphasis and periods, case-insensitively; a score must parse as a
-// number in [0, 1]. Anything else is ErrMalformed.
+// emphasis and periods, case-insensitively. Anything else is
+// ErrMalformed.
 func Parse(req provider.DecideRequest, text string) (provider.DecideResult, error) {
 	answer := strings.Trim(text, " \t\r\n\"'`*.")
-	if req.Kind == provider.DecideScore {
-		score, err := strconv.ParseFloat(answer, 64)
-		if err != nil || score < 0 || score > 1 {
-			return provider.DecideResult{}, fmt.Errorf("%w: %q is not a number in [0, 1]", ErrMalformed, truncate(text))
-		}
-		return provider.DecideResult{Score: &score}, nil
-	}
 	ansID := answer
 	if cutAns, _, ok := strings.Cut(answer, ":"); ok {
 		ansID = strings.TrimSpace(cutAns)

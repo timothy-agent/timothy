@@ -60,8 +60,6 @@ func fail(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, admin.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
-	case errors.Is(err, admin.ErrUnsupported):
-		jsonError(w, http.StatusUnprocessableEntity, "unsupported", err.Error())
 	case errors.Is(err, admin.ErrUpstream):
 		jsonError(w, http.StatusBadGateway, "upstream_unavailable", err.Error())
 	default:
@@ -126,8 +124,7 @@ func (h *adminAPI) test(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, res)
 }
 
-// models proxies the provider's own model-listing endpoint; 422 means
-// the driver cannot list models and the UI falls back to manual entry.
+// models serves the provider's one model list (D-172).
 func (h *adminAPI) models(w http.ResponseWriter, r *http.Request) {
 	models, err := h.adm.AvailableModels(r.Context(), r.PathValue("id"))
 	if err != nil {

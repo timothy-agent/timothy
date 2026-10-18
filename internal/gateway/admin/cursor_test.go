@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
@@ -70,28 +69,5 @@ func TestCursorFetchModelsNeverLeaksKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret-key") {
 		t.Fatalf("error leaked key material: %v", err)
-	}
-}
-
-func TestCursorModelsCacheServesWithinTTL(t *testing.T) {
-	orig := cursorCache
-	t.Cleanup(func() { cursorCache = orig })
-	cursorCache = &cursorModelsCache{entries: map[string]cursorModelsCacheEntry{}}
-	cursorCache.set("p1", []provider.AvailableModel{{ID: "cached"}})
-
-	got, ok := cursorCache.get("p1")
-	if !ok || len(got) != 1 || got[0].ID != "cached" {
-		t.Fatalf("cache get = %+v, ok=%v, want cached hit", got, ok)
-	}
-}
-
-func TestCursorModelsCacheExpires(t *testing.T) {
-	orig := cursorCache
-	t.Cleanup(func() { cursorCache = orig })
-	cursorCache = &cursorModelsCache{entries: map[string]cursorModelsCacheEntry{
-		"p1": {models: []provider.AvailableModel{{ID: "stale"}}, fetchedAt: time.Now().Add(-cursorModelsCacheTTL - time.Second)},
-	}}
-	if _, ok := cursorCache.get("p1"); ok {
-		t.Fatal("cache served an expired entry")
 	}
 }
