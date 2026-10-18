@@ -13,7 +13,7 @@ import (
 // records the last request payload it received.
 type jevStub struct {
 	srv    *httptest.Server
-	got    jevRequest
+	got    systemoneRequest
 	auth   string
 	status int
 	answer string
@@ -45,7 +45,7 @@ func newJevStub(t *testing.T, answer string) *jevStub {
 
 func TestJevCapabilitiesAndStream(t *testing.T) {
 	t.Parallel()
-	j := NewJev(JevConfig{Name: "jev"})
+	j := NewJev(SystemOneConfig{Name: "jev"})
 	caps := j.Capabilities()
 	if len(caps) != 1 || caps[0] != CapDecide {
 		t.Fatalf("capabilities = %v, want decide only", caps)
@@ -58,7 +58,7 @@ func TestJevCapabilitiesAndStream(t *testing.T) {
 func TestJevDecideChoice(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL, APIKey: "jv_live_testkey"}) // #nosec G101
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL, APIKey: "jv_live_testkey"}) // #nosec G101
 
 	res, usage, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
@@ -102,7 +102,7 @@ func TestJevDecideChoice(t *testing.T) {
 func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 
 	res, _, err := j.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
@@ -132,7 +132,7 @@ func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 func TestJevDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"hallucinated","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 
 	_, _, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
@@ -157,7 +157,7 @@ func TestJevDecideYesNo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := newJevStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
-			j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+			j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 			res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
@@ -179,7 +179,7 @@ func TestJevDecideScore(t *testing.T) {
 	t.Run("default criteria 4 levels", func(t *testing.T) {
 		t.Parallel()
 		stub := newJevStub(t, `{"type":"score","score":1.5,"probabilities":{"0":0.1,"1":0.3,"2":0.4,"3":0.2}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 		res, usage, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "How relevant is this document?"})
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
@@ -206,7 +206,7 @@ func TestJevDecideScore(t *testing.T) {
 	t.Run("custom 3 levels 0 to 2 scale", func(t *testing.T) {
 		t.Parallel()
 		stub := newJevStub(t, `{"type":"score","score":1.84,"probabilities":{"0":0.05,"1":0.11,"2":0.84}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 		res, _, err := j.Decide(t.Context(), "", DecideRequest{
 			Kind:     DecideScore,
 			Question: "How urgent is this incident?",
@@ -233,7 +233,7 @@ func TestJevDecideScoreOutsideRangeIsAnError(t *testing.T) {
 	t.Parallel()
 	for _, badScore := range []string{"-0.1", "3.5"} {
 		stub := newJevStub(t, `{"type":"score","score":`+badScore+`}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 		_, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
 		if err == nil || !strings.Contains(err.Error(), "outside [0, 3]") {
 			t.Fatalf("score %s: err = %v, want 'outside [0, 3]'", badScore, err)
@@ -250,7 +250,7 @@ func TestJevDecideHTTPErrorWithoutRequestBody(t *testing.T) {
 	stub := newJevStub(t, `{"error":"invalid_api_key","message":"unauthorized"}`)
 	stub.status = http.StatusUnauthorized
 
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 	_, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: sensitiveQuestion})
 	if err == nil {
 		t.Fatal("Decide must error on 401")
@@ -273,7 +273,7 @@ func TestJevURLVariations(t *testing.T) {
 		stub.srv.URL + "/v1",
 		stub.srv.URL + "/v1/systemone",
 	} {
-		j := NewJev(JevConfig{Name: "jev", BaseURL: u})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: u})
 		res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"yes", "no"}})
 		if err != nil {
 			t.Fatalf("url %s: Decide: %v", u, err)
@@ -299,7 +299,7 @@ func TestJevListModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		j := NewJev(JevConfig{Name: "jev", BaseURL: srv.URL})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
 		models, err := j.ListModels(t.Context())
 		if err != nil {
 			t.Fatalf("ListModels: %v", err)
@@ -312,15 +312,43 @@ func TestJevListModels(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback when endpoint unavailable", func(t *testing.T) {
+	t.Run("error when endpoint unavailable", func(t *testing.T) {
 		t.Parallel()
-		j := NewJev(JevConfig{Name: "jev", BaseURL: "http://127.0.0.1:1"})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: "http://127.0.0.1:1"})
+		models, err := j.ListModels(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "jev: list models") {
+			t.Fatalf("ListModels = %+v, %v; want a jev list models error", models, err)
+		}
+		if models != nil {
+			t.Fatalf("models = %+v, want none on error", models)
+		}
+	})
+
+	t.Run("error on HTTP failure", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"invalid_api_key"}`, http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
+		if models, err := j.ListModels(t.Context()); err == nil || !strings.Contains(err.Error(), "401") {
+			t.Fatalf("ListModels = %+v, %v; want a 401 error", models, err)
+		}
+	})
+
+	t.Run("empty list when the endpoint lists nothing", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"models":[]}`))
+		}))
+		defer srv.Close()
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
 		models, err := j.ListModels(t.Context())
 		if err != nil {
-			t.Fatalf("ListModels fallback: %v", err)
+			t.Fatalf("ListModels: %v", err)
 		}
-		if len(models) != 3 || models[0].ID != "jev-latest" || models[1].ID != "jev-preview" || models[2].ID != "jev-1.13.0" {
-			t.Fatalf("models = %+v, want default static list", models)
+		if len(models) != 0 {
+			t.Fatalf("models = %+v, want empty", models)
 		}
 	})
 }
