@@ -571,15 +571,19 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 // decide role and falls back to the summarize role when decide is
 // unbound or empty (D-163): one chain serves the whole answer.
 func DecideOverGateway(gw Gateway) agents.Decide {
-	return func(ctx context.Context, kind, question, state string, options []string) (string, error) {
+	return func(ctx context.Context, kind, question, state string, options []agents.DecideOption) (string, error) {
 		if gw == nil {
 			return "", fmt.Errorf("chat: decide: nil gateway")
+		}
+		opts := make([]gwclient.DecideOption, len(options))
+		for i, o := range options {
+			opts[i] = gwclient.DecideOption{ID: o.ID, Description: o.Description}
 		}
 		resp, err := gw.Decide(ctx, gwclient.DecideRequest{
 			Kind:     kind,
 			Question: question,
 			State:    state,
-			Options:  options,
+			Options:  opts,
 			Purpose:  "decide",
 		})
 		if err != nil {
@@ -635,13 +639,9 @@ func (s *Service) resolveAutoRoute(ctx context.Context, sessionID string, events
 		return ""
 	}
 
-	options := make([]string, len(candidates))
+	options := make([]gwclient.DecideOption, len(candidates))
 	for i, c := range candidates {
-		if c.Description != "" {
-			options[i] = fmt.Sprintf("%s: %s", c.Name, c.Description)
-		} else {
-			options[i] = c.Name
-		}
+		options[i] = gwclient.DecideOption{ID: c.Name, Description: c.Description}
 	}
 	q := "Pick the single best-fit model route for the user's message."
 	dctx, cancel := context.WithTimeout(ctx, routeIntentTimeout)
@@ -658,12 +658,8 @@ func (s *Service) resolveAutoRoute(ctx context.Context, sessionID string, events
 	if err != nil {
 		return defaultRoute
 	}
-	choice := strings.TrimSpace(resp.Choice)
-	if idx := strings.Index(choice, ":"); idx > 0 {
-		choice = strings.TrimSpace(choice[:idx])
-	}
 	for _, c := range candidates {
-		if choice == c.Name && s.chatRouteUsable(ctx, c.Name) {
+		if resp.Choice == c.Name && s.chatRouteUsable(ctx, c.Name) {
 			return c.Name
 		}
 	}
