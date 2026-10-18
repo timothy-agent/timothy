@@ -204,7 +204,7 @@ func TestModelList(t *testing.T) {
 			p: Provider{ID: "p-mars-anthropic", Name: "mars-ai", Kind: "api", Driver: "openaicompat", BaseURL: "https://mars-ai.example.com/v1",
 				DefaultModel: "m-custom", Options: map[string]string{"litellm_provider": "anthropic"}},
 			fetch: nil,
-			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog",
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog", PriceSource: "catalog",
 				InputPerMTok: ptrF(3), OutputPerMTok: ptrF(15), MaxInputTokens: ptrI(200000)}},
 		},
 		{
