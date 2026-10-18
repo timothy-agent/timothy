@@ -2044,3 +2044,37 @@ func TestResolveDecideAcceptsChatOrDecider(t *testing.T) {
 		t.Fatalf("RouteForRole(decide) = %q, %v", name, ok)
 	}
 }
+
+func TestChatRouteCandidates(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "chat", Kind: "api", Driver: "openaicompat", BaseURL: "https://chat.example/v1", DefaultModel: "m", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "default", Capability: "chat", Role: "default", Description: "", Enabled: true},
+		{Name: "summarize", Capability: "chat", Role: "summarize", Description: "Summarization role", Enabled: true},
+		{Name: "vision", Capability: "vision", Role: "vision", Description: "Vision models", Enabled: true},
+		{Name: "embed", Capability: "embeddings", Role: "embedding", Description: "Embeddings", Enabled: true},
+		{Name: "decide", Capability: "decide", Role: "decide", Description: "Decision models", Enabled: true},
+		{Name: "coding", Capability: "chat", Description: "Software engineering and coding", Enabled: true},
+		{Name: "research", Capability: "chat", Description: "Deep research and web lookup", Enabled: true},
+		{Name: "unnamed-chat", Capability: "chat", Description: "", Enabled: true},
+		{Name: "disabled-chat", Capability: "chat", Description: "Disabled route", Enabled: false},
+	}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	candidates := snap.ChatRouteCandidates()
+
+	if len(candidates) != 3 {
+		t.Fatalf("len(candidates) = %d, want 3 (default, coding, research), got: %+v", len(candidates), candidates)
+	}
+	if candidates[0].Name != "default" {
+		t.Fatalf("candidates[0] = %q, want default first", candidates[0].Name)
+	}
+	if candidates[1].Name != "coding" || candidates[1].Description != "Software engineering and coding" {
+		t.Fatalf("candidates[1] = %+v, want coding", candidates[1])
+	}
+	if candidates[2].Name != "research" || candidates[2].Description != "Deep research and web lookup" {
+		t.Fatalf("candidates[2] = %+v, want research", candidates[2])
+	}
+}
+

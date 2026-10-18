@@ -31,6 +31,14 @@ func (supersedeSmokeGateway) Decide(_ context.Context, _ gwclient.DecideRequest)
 	return gwclient.DecideResponse{}, nil
 }
 
+func (supersedeSmokeGateway) ResolveRoute(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+	return &gwclient.ResolvedRoute{Route: name, Entries: []gwclient.ResolvedRouteEntry{{Model: "m", Usable: true}}}, nil
+}
+
+func (supersedeSmokeGateway) ChatRouteCandidates(context.Context) ([]gwclient.RouteCandidate, error) {
+	return nil, nil
+}
+
 func (supersedeSmokeGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	text := "I moved to Berlin."
 	if req.Purpose == "memory-extract" {

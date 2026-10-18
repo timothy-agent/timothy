@@ -1383,7 +1383,7 @@ export async function listRoutes(): Promise<AdminRoute[]> {
 
 export async function patchRoute(
   name: string,
-  patch: { chain?: ChainEntry[]; strategy?: string; enabled?: boolean },
+  patch: { chain?: ChainEntry[]; strategy?: string; enabled?: boolean; description?: string },
 ): Promise<void> {
   await request<void>(`/v1/admin/routes/${name}`, {
     method: 'PATCH',

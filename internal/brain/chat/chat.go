@@ -76,6 +76,8 @@ type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
 	RouteForRole(ctx context.Context, role string) (string, bool, error)
 	Decide(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error)
+	ResolveRoute(ctx context.Context, name, harness, hint string) (*gwclient.ResolvedRoute, error)
+	ChatRouteCandidates(ctx context.Context) ([]gwclient.RouteCandidate, error)
 }
 
 // SessionLog is the slice of the session store chat needs; tests fake
@@ -594,6 +596,95 @@ func DecideOverGateway(gw Gateway) agents.Decide {
 		}
 		return resp.Choice, nil
 	}
+}
+
+// resolveAutoRoute picks the model route for an Auto chat turn by message intent
+// using a decision model (D-164).
+//
+// Rules:
+// - If the decide role is unbound or errors, returns "" so caller falls back to default.
+// - Candidates are enabled chat routes that have a description, plus the default role's route.
+// - If only the default route is in the candidate set, skip decide and return "".
+// - The decide call picks one route from the candidate options.
+// - The picked name must match a candidate's name exactly.
+// - Usability gate: ResolveRoute verifies the picked route has at least one usable
+//   entry on the chat axis. If unusable, returns "" so caller falls back to default role,
+//   which still goes through the gateway's normal usability gate at stream time.
+func (s *Service) resolveAutoRoute(ctx context.Context, message string) string {
+	if s.gw == nil {
+		return ""
+	}
+	decideRoute, ok, err := s.gw.RouteForRole(ctx, "decide")
+	if err != nil || !ok {
+		return ""
+	}
+	candidates, err := s.gw.ChatRouteCandidates(ctx)
+	if err != nil || len(candidates) <= 1 {
+		return ""
+	}
+	defaultRoute := s.roleRoute(ctx, "default")
+	hasOther := false
+	for _, c := range candidates {
+		if c.Name != defaultRoute {
+			hasOther = true
+			break
+		}
+	}
+	if !hasOther {
+		return ""
+	}
+
+	options := make([]string, len(candidates))
+	for i, c := range candidates {
+		if c.Description != "" {
+			options[i] = fmt.Sprintf("%s: %s", c.Name, c.Description)
+		} else {
+			options[i] = c.Name
+		}
+	}
+	q := "Pick the single best-fit model route for the user's message."
+	resp, err := s.gw.Decide(ctx, gwclient.DecideRequest{
+		Route:    decideRoute,
+		Kind:     "choice",
+		Question: q,
+		State:    message,
+		Options:  options,
+		Purpose:  "route_intent",
+	})
+	if err != nil {
+		return ""
+	}
+	choice := strings.TrimSpace(resp.Choice)
+	if idx := strings.Index(choice, ":"); idx > 0 {
+		choice = strings.TrimSpace(choice[:idx])
+	}
+	var picked string
+	for _, c := range candidates {
+		if choice == c.Name {
+			picked = c.Name
+			break
+		}
+	}
+	if picked == "" {
+		return ""
+	}
+
+	// Usability gate: verify the picked route has at least one usable entry on the chat axis.
+	resolved, err := s.gw.ResolveRoute(ctx, picked, "", "")
+	if err != nil || resolved == nil {
+		return ""
+	}
+	usable := false
+	for _, entry := range resolved.Entries {
+		if entry.Usable {
+			usable = true
+			break
+		}
+	}
+	if !usable {
+		return ""
+	}
+	return picked
 }
 
 // ClassifyOverGateway builds an agents.Classify that asks the
@@ -1177,6 +1268,9 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	}
 	if route == "" {
 		route = profile.Route
+	}
+	if route == "" {
+		route = s.resolveAutoRoute(ctx, req.Message)
 	}
 	if route == "" {
 		route = s.roleRoute(ctx, "default")
