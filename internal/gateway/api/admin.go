@@ -45,7 +45,6 @@ func RegisterAdmin(srv *httpserver.Server, adm *admin.Admin) {
 	srv.Handle("GET /internal/admin/catalog/status", http.HandlerFunc(h.catalogStatus))
 	srv.Handle("GET /internal/admin/catalog/models", http.HandlerFunc(h.catalogModels))
 	srv.Handle("POST /internal/admin/catalog/prices", http.HandlerFunc(h.catalogPrices))
-	srv.Handle("GET /internal/admin/providers/{id}/catalog-models", http.HandlerFunc(h.catalogModelsForProvider))
 }
 
 type adminAPI struct {
@@ -431,16 +430,6 @@ func (h *adminAPI) catalogModels(w http.ResponseWriter, r *http.Request) {
 	models, err := h.adm.CatalogSearch(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("provider"), limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "admin_failed", err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"models": models})
-}
-
-func (h *adminAPI) catalogModelsForProvider(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	models, err := h.adm.CatalogModelsForProvider(r.Context(), r.PathValue("id"), r.URL.Query().Get("q"), limit)
-	if err != nil {
-		fail(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"models": models})

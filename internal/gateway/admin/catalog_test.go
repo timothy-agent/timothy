@@ -84,7 +84,7 @@ func TestCatalogSearchThroughAdmin(t *testing.T) {
 }
 
 // TestCatalogModelsWireShapeStripsOwnPrefix covers the id field
-// CatalogSearch/CatalogModelsForProvider add to the wire shape: the
+// CatalogSearch adds to the wire shape: the
 // entry's own litellm_provider prefix stripped from model_key (the id
 // a provider's API actually accepts), with model_key kept alongside
 // unchanged for reference. A bare key (openai/gpt-4o has no zai/xai

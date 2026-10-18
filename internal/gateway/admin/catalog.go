@@ -30,26 +30,6 @@ func (a *Admin) CatalogSearch(ctx context.Context, q, litellmProvider string, li
 	return a.catalog.Search(ctx, q, litellmProvider, limit)
 }
 
-// CatalogModelsForProvider searches the catalog restricted to a
-// provider row's candidate litellm_provider(s) — the model id picker
-// on a provider's form, offering real catalog ids beyond what's
-// already declared. A kind='cli' row has no chat driver (D-051), but
-// claude-cli specifically talks Anthropic's own API under the hood, so
-// it maps to the "anthropic" catalog provider. Other cli drivers
-// (codex-cli) and an unrecognized api driver/host map to no vendor and
-// get an empty list (D-171).
-func (a *Admin) CatalogModelsForProvider(ctx context.Context, id, q string, limit int) ([]catalog.Model, error) {
-	p, err := a.get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	models, err := a.catalog.SearchProviders(ctx, q, catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options, p.Name, p.DefaultModel), limit)
-	if err != nil {
-		return nil, fmt.Errorf("admin catalog models: %w", err)
-	}
-	return models, nil
-}
-
 // ProviderModel is one (provider row name, model id) pair CatalogPrices
 // is asked to price — provider is the providers row's name exactly as
 // recorded in cost_ledger.provider, so a caller reading ledger rows can

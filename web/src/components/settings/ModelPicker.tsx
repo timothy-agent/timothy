@@ -10,9 +10,8 @@ const catalogSearchDebounceMs = 250
 // pause in typing rather than per keystroke, and guards against
 // out-of-order responses with a request-sequence counter: a stale
 // response (fired before the latest q but resolving after it) is
-// dropped rather than clobbering what's now on screen. Every
-// ModelPicker host (CliModelsSection, DefaultModelSection, ProviderAdd,
-// RouteEdit's chain entry picker) shares this so the guard lives once.
+// dropped rather than clobbering what's now on screen. ProviderAdd
+// uses it before validation, when no model list exists yet.
 // search must be stable across renders that don't change its own
 // inputs (wrap with useCallback) or it re-debounces on every keystroke
 // for no reason.

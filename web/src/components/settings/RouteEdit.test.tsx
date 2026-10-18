@@ -7,14 +7,14 @@ import { TooltipProvider } from '../ui/tooltip'
 import { RouteEdit } from './RouteEdit'
 
 vi.mock('../../api/client', () => ({
-  catalogModelsForProvider: vi.fn(),
+  availableModels: vi.fn(),
   listRoutes: vi.fn(),
   listProviders: vi.fn(),
   patchRoute: vi.fn(),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from '../../api/client'
+import { availableModels, listProviders, listRoutes, patchRoute } from '../../api/client'
 import { toast } from 'sonner'
 
 const providers: AdminProvider[] = [
@@ -88,7 +88,7 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue([orderedRoute, scoredRoute])
   vi.mocked(listProviders).mockResolvedValue(providers)
   vi.mocked(patchRoute).mockResolvedValue(undefined)
-  vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+  vi.mocked(availableModels).mockResolvedValue([])
   // jsdom lacks scrollIntoView; Radix Select calls it on open.
   Element.prototype.scrollIntoView = vi.fn()
 })
@@ -373,23 +373,17 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
     expect(screen.getByRole('option', { name: /grok/ })).toBeInTheDocument()
   })
 
-  it('lists catalog models with prices', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([
-      { id: 'sonnet', model_key: 'sonnet', litellm_provider: 'anthropic', mode: 'chat' },
-      {
-        id: 'claude-opus-4-6',
-        model_key: 'claude-opus-4-6',
-        litellm_provider: 'anthropic',
-        mode: 'chat',
-        input_per_mtok: 15,
-        output_per_mtok: 75,
-      },
+  it('lists the selected provider\'s unified models with prices', async () => {
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'sonnet', source: 'live' },
+      { id: 'claude-opus-4-6', source: 'live', input_per_mtok: 15, output_per_mtok: 75 },
     ])
     renderRoute('default')
     fireEvent.click(await screen.findByRole('combobox', { name: 'Provider' }))
     fireEvent.click(await screen.findByRole('option', { name: /anthropic/ }))
 
     const modelInput = await screen.findByRole('textbox', { name: 'Model' })
+    await waitFor(() => expect(availableModels).toHaveBeenCalledWith('p1'))
     fireEvent.change(modelInput, { target: { value: '' } })
     fireEvent.focus(modelInput)
 
@@ -399,30 +393,39 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
     ).toBeInTheDocument()
   })
 
-  it('debounces typing into a single catalog search call with the typed q', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+  it('fetches nothing until a provider is chosen, then once per provider', async () => {
     renderRoute('default')
     fireEvent.click(await screen.findByRole('combobox', { name: 'Provider' }))
+    expect(availableModels).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('option', { name: /anthropic/ }))
 
     const modelInput = await screen.findByRole('textbox', { name: 'Model' })
     fireEvent.change(modelInput, { target: { value: 'claude-op' } })
     fireEvent.change(modelInput, { target: { value: 'claude-opus' } })
 
-    await waitFor(() => expect(catalogModelsForProvider).toHaveBeenCalledWith('p1', 'claude-opus'))
-    expect(catalogModelsForProvider).not.toHaveBeenCalledWith('p1', 'claude-op')
+    await waitFor(() => expect(availableModels).toHaveBeenCalledWith('p1'))
+    expect(availableModels).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers the provider default and the typed-id hint when the list is empty', async () => {
+    vi.mocked(availableModels).mockResolvedValue([])
+    renderRoute('default')
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Provider' }))
+    fireEvent.click(await screen.findByRole('option', { name: /grok/ }))
+
+    expect(await screen.findByText('This provider lists no models. Type any model id it accepts.')).toBeInTheDocument()
+    const modelInput = screen.getByRole('textbox', { name: 'Model' })
+    fireEvent.change(modelInput, { target: { value: '' } })
+    fireEvent.focus(modelInput)
+
+    const options = await screen.findAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('grok-4')
   })
 
   it('picking a suggested model and adding it stages the chain entry; Save sends it', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([
-      {
-        id: 'claude-opus-4-6',
-        model_key: 'claude-opus-4-6',
-        litellm_provider: 'anthropic',
-        mode: 'chat',
-        input_per_mtok: 15,
-        output_per_mtok: 75,
-      },
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'claude-opus-4-6', source: 'live', input_per_mtok: 15, output_per_mtok: 75 },
     ])
     renderRoute('default')
     fireEvent.click(await screen.findByRole('combobox', { name: 'Provider' }))

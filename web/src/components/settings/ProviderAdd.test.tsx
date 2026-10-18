@@ -158,6 +158,109 @@ describe('ProviderAdd model suggestions', () => {
   })
 })
 
+describe('ProviderAdd model list after validation', () => {
+  beforeEach(() => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(searchCatalog).mockResolvedValue([
+      { id: 'glm-catalog-only', model_key: 'zai/glm-catalog-only', litellm_provider: 'zai', mode: 'chat' },
+    ])
+  })
+
+  async function validate() {
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+  }
+
+  it('suggests the validated config\'s model list instead of the catalog', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({
+      ok: true,
+      latency_ms: 12,
+      model: 'glm-5.2',
+      models: [
+        { id: 'glm-5.2', source: 'live', input_per_mtok: 0.6, output_per_mtok: 2.2 },
+        { id: 'glm-live-only', source: 'live' },
+      ],
+    })
+    renderPage('glm')
+    await validate()
+
+    const input = screen.getByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByRole('option', { name: /^glm-live-only/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /glm-5\.2.*in \$0\.60 · out \$2\.20 \/MTok/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /glm-catalog-only/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps the list when the model changes, and still takes a free-typed id', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({
+      ok: true,
+      latency_ms: 12,
+      model: 'glm-5.2',
+      models: [{ id: 'glm-live-only', source: 'live' }],
+    })
+    renderPage('glm')
+    await validate()
+
+    const input = screen.getByPlaceholderText('model id')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'glm-live' } })
+    expect(await screen.findByRole('option', { name: /^glm-live-only/ })).toBeInTheDocument()
+
+    fireEvent.change(input, { target: { value: 'my-own-id' } })
+    expect(input).toHaveValue('my-own-id')
+    expect(screen.queryByRole('option', { name: /glm-catalog-only/ })).not.toBeInTheDocument()
+  })
+
+  it('drops back to the catalog when the connection changes', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({
+      ok: true,
+      latency_ms: 12,
+      model: 'glm-5.2',
+      models: [{ id: 'glm-live-only', source: 'live' }],
+    })
+    renderPage('glm')
+    await validate()
+
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'other-key' } })
+    const input = screen.getByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByRole('option', { name: /^glm-catalog-only/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /glm-live-only/ })).not.toBeInTheDocument()
+  })
+
+  it('shows the typed-id hint and the validated model as the one suggestion for an empty list', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2', models: [] })
+    renderPage('glm')
+    await validate()
+
+    expect(screen.getByText(/This provider lists no models\. Type any model id it accepts\./)).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    const options = await screen.findAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('glm-5.2')
+  })
+
+  it('keeps catalog suggestions when validation returns no list', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2', models: null })
+    renderPage('glm')
+    await validate()
+
+    const input = screen.getByPlaceholderText('model id')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByRole('option', { name: /^glm-catalog-only/ })).toBeInTheDocument()
+  })
+})
+
 describe('ProviderAdd seeds options.litellm_provider', () => {
   beforeEach(() => {
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2' })
