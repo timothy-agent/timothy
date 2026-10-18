@@ -130,17 +130,13 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 			if c.BaseURL == "" {
 				return nil, fmt.Errorf("registry: provider %q: laya requires base_url", c.Name)
 			}
-			p = NewLaya(LayaConfig{
+			p = NewLaya(SystemOneConfig{
 				Name: c.Name, BaseURL: c.BaseURL,
 				Headers: c.Headers, Timeout: c.Timeout,
 			})
 		case "jev":
-			baseURL := c.BaseURL
-			if baseURL == "" {
-				baseURL = DefaultJevBaseURL
-			}
-			p = NewJev(JevConfig{
-				Name: c.Name, BaseURL: baseURL, APIKey: key,
+			p = NewJev(SystemOneConfig{
+				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
 				Headers: c.Headers, Timeout: c.Timeout,
 			})
 		default:
