@@ -8,17 +8,21 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 )
 
 type MissionSample struct {
 	Goal      string `json:"goal"`
 	WantKind  string `json:"want_kind"`
 	WantLight bool   `json:"want_light"`
+	Source    string `json:"source"`
 }
 
 type AgentCandidate struct {
@@ -31,6 +35,7 @@ type AgentSample struct {
 	Message    string           `json:"message"`
 	Candidates []AgentCandidate `json:"candidates"`
 	WantAgent  string           `json:"want_agent"`
+	Source     string           `json:"source"`
 }
 
 type KBCollection struct {
@@ -45,6 +50,7 @@ type KBFilingSample struct {
 	Text        string         `json:"text"`
 	Collections []KBCollection `json:"collections"`
 	WantChoice  string         `json:"want_choice"`
+	Source      string         `json:"source"`
 }
 
 type Dataset struct {
@@ -53,6 +59,9 @@ type Dataset struct {
 	KBFiling []KBFilingSample `json:"kb_filing"`
 }
 
+// Metric is one site's tally for one classifier mode. Native and
+// Fallback count decide answers by how the gateway served them; the
+// stream classifier leaves both zero.
 type Metric struct {
 	Total       int
 	Correct     int
@@ -60,7 +69,8 @@ type Metric struct {
 	TotalTokens int
 	Provider    string
 	Model       string
-	Native      bool
+	Native      int
+	Fallback    int
 }
 
 func (m Metric) Accuracy() float64 {
@@ -68,6 +78,18 @@ func (m Metric) Accuracy() float64 {
 		return 0
 	}
 	return float64(m.Correct) / float64(m.Total) * 100
+}
+
+// Interval is the 95% Wilson score interval of the accuracy, in percent.
+func (m Metric) Interval() (lo, hi float64) {
+	lo, hi = wilson(m.Correct, m.Total)
+	return lo * 100, hi * 100
+}
+
+// Report renders "c/n = p% [lo, hi]".
+func (m Metric) Report() string {
+	lo, hi := m.Interval()
+	return fmt.Sprintf("%d/%d = %.1f%% [%.1f, %.1f]", m.Correct, m.Total, m.Accuracy(), lo, hi)
 }
 
 func (m Metric) AvgLatencyMS() int64 {
@@ -82,6 +104,78 @@ func (m Metric) AvgTokens() int {
 		return 0
 	}
 	return m.TotalTokens / m.Total
+}
+
+// addDecide books one decide call's cost and how it was served.
+func (m *Metric) addDecide(r decideReply, err error) {
+	m.Latency += r.Latency
+	m.TotalTokens += r.Tokens
+	if err != nil {
+		return
+	}
+	m.Provider, m.Model = r.Provider, r.Model
+	if r.Native {
+		m.Native++
+	} else {
+		m.Fallback++
+	}
+}
+
+// wilson is the 95% Wilson score interval for correct out of total.
+func wilson(correct, total int) (lo, hi float64) {
+	if total == 0 {
+		return 0, 1
+	}
+	const z = 1.96
+	n := float64(total)
+	p := float64(correct) / n
+	denom := 1 + z*z/n
+	center := (p + z*z/(2*n)) / denom
+	half := z * math.Sqrt(p*(1-p)/n+z*z/(4*n*n)) / denom
+	return math.Max(0, center-half), math.Min(1, center+half)
+}
+
+// overlaps reports whether two metrics' 95% intervals overlap: the
+// difference between them is not distinguishable from noise.
+func overlaps(a, b Metric) bool {
+	alo, ahi := a.Interval()
+	blo, bhi := b.Interval()
+	return alo <= bhi && blo <= ahi
+}
+
+// compare names the relation between decide and the classifier.
+func compare(decideM, classifyM Metric) string {
+	if overlaps(decideM, classifyM) {
+		return "TIE (95% intervals overlap)"
+	}
+	if decideM.Accuracy() > classifyM.Accuracy() {
+		return "DECIDE BETTER"
+	}
+	return "DECIDE WORSE"
+}
+
+// gateFailures applies the swap gate: a swapped site's decide accuracy
+// must be nonzero and at least the classifier's; with requireNative,
+// every decide answer must come from a native decision model.
+func gateFailures(agentDecideM, agentClassifyM Metric, requireNative bool, decideMetrics []Metric) []string {
+	var failed []string
+	if agentDecideM.Total == 0 || agentDecideM.Correct == 0 || agentDecideM.Accuracy() < agentClassifyM.Accuracy() {
+		failed = append(failed, fmt.Sprintf("Accuracy on swapped site Agent Auto-Dispatch: decide %.1f%% < shipping classifier %.1f%%", agentDecideM.Accuracy(), agentClassifyM.Accuracy()))
+	}
+	if requireNative {
+		native, fallback := 0, 0
+		for _, m := range decideMetrics {
+			native += m.Native
+			fallback += m.Fallback
+		}
+		switch {
+		case fallback > 0:
+			failed = append(failed, fmt.Sprintf("Native decision model required (-require-native), but %d of %d decide answers came from the llm fallback", fallback, native+fallback))
+		case native == 0:
+			failed = append(failed, "Native decision model required (-require-native), but no decide call succeeded")
+		}
+	}
+	return failed
 }
 
 type Evaluator struct {
@@ -106,6 +200,9 @@ func truncateRunes(s string, n int) string {
 	return string(runes[:n])
 }
 
+// decideAPIResponse is the POST /v1/decide reply. Native is false when
+// the route answered through the llm fallback (the ledger books that
+// attempt with effort "low").
 type decideAPIResponse struct {
 	Choice   string `json:"choice"`
 	Provider string `json:"provider"`
@@ -124,7 +221,17 @@ type decideOption struct {
 	Description string `json:"description,omitempty"`
 }
 
-func (e *Evaluator) callDecide(ctx context.Context, kind, question, state string, options []decideOption, purpose string) (string, int, string, string, bool, time.Duration, error) {
+// decideReply is one decide call's answer and cost.
+type decideReply struct {
+	Choice   string
+	Tokens   int
+	Provider string
+	Model    string
+	Native   bool
+	Latency  time.Duration
+}
+
+func (e *Evaluator) callDecide(ctx context.Context, kind, question, state string, options []decideOption, purpose string) (decideReply, error) {
 	reqBody := map[string]any{
 		"kind":     kind,
 		"question": question,
@@ -139,35 +246,35 @@ func (e *Evaluator) callDecide(ctx context.Context, kind, question, state string
 	}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", 0, "", "", false, 0, err
+		return decideReply{}, err
 	}
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.gatewayURL+"/v1/decide", bytes.NewReader(b))
 	if err != nil {
-		return "", 0, "", "", false, 0, err
+		return decideReply{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.client.Do(req)
-	dur := time.Since(start)
+	r := decideReply{Latency: time.Since(start)}
 	if err != nil {
-		return "", 0, "", "", false, dur, err
+		return r, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", 0, "", "", false, dur, fmt.Errorf("decide returned HTTP %d: %s", resp.StatusCode, string(body))
+		return r, fmt.Errorf("decide returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var out decideAPIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", 0, "", "", false, dur, err
+		return r, err
 	}
-	tokens := 0
+	r.Choice, r.Provider, r.Model, r.Native = out.Choice, out.Provider, out.Model, out.Native
 	if out.Usage != nil {
-		tokens = out.Usage.OutputTokens
+		r.Tokens = out.Usage.OutputTokens
 	}
-	return out.Choice, tokens, out.Provider, out.Model, out.Native, dur, nil
+	return r, nil
 }
 
 type streamUsage struct {
@@ -244,13 +351,44 @@ func (e *Evaluator) callStream(ctx context.Context, system, prompt, purpose stri
 	return textBuf.String(), tokens, dur, scanner.Err()
 }
 
+// siteResults holds every metric one eval run produces.
+type siteResults struct {
+	KindDecide, KindClassify   Metric
+	LightDecide, LightClassify Metric
+	AgentDecide, AgentClassify Metric
+	KBDecide, KBClassify       Metric
+}
+
+func (r siteResults) decideMetrics() []Metric {
+	return []Metric{r.KindDecide, r.LightDecide, r.AgentDecide, r.KBDecide}
+}
+
+// runEval runs every site against the gateway behind e.
+func runEval(ctx context.Context, e *Evaluator, ds Dataset) siteResults {
+	var r siteResults
+	r.KindDecide, r.KindClassify, r.LightDecide, r.LightClassify = evalMissionPreview(ctx, e, ds.Missions)
+	r.AgentDecide, r.AgentClassify = evalAgentDispatch(ctx, e, ds.Agents)
+	r.KBDecide, r.KBClassify = evalKBFiling(ctx, e, ds.KBFiling)
+	return r
+}
+
+func loadDataset(path string) (Dataset, error) {
+	var ds Dataset
+	b, err := os.ReadFile(path) // #nosec G304 -- operator-supplied dataset path
+	if err != nil {
+		return ds, err
+	}
+	err = json.Unmarshal(b, &ds)
+	return ds, err
+}
+
 func main() {
 	var (
 		datasetPath   = flag.String("dataset", "", "path to dataset.json")
 		gatewayURL    = flag.String("gateway-url", "http://gateway:8081", "gateway base URL")
 		route         = flag.String("route", "", "gateway route for decide (empty uses default decide role, 'summarize' exercises LLM fallback)")
 		mode          = flag.String("mode", "live", "evaluation mode: 'live' (gateway API) or 'simulate'")
-		requireNative = flag.Bool("require-native", false, "fail if decide route is not served by a native decision model (Laya or Jev)")
+		requireNative = flag.Bool("require-native", false, "fail if any decide answer came from the llm fallback instead of a native decision model")
 		maxLatencyMS  = flag.Int64("max-latency-ms", 300, "maximum latency ceiling in ms for native decision model")
 	)
 	flag.Parse()
@@ -265,173 +403,159 @@ func main() {
 		}
 	}
 
-	dataBytes, err := os.ReadFile(*datasetPath)
+	ds, err := loadDataset(*datasetPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading dataset from %s: %v\n", *datasetPath, err)
-		os.Exit(1)
-	}
-
-	var ds Dataset
-	if err := json.Unmarshal(dataBytes, &ds); err != nil {
-		fmt.Fprintf(os.Stderr, "error decoding dataset: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error loading dataset from %s: %v\n", *datasetPath, err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("# Decision Model vs Shipping Classifier Evaluation Gate\n\n")
-	fmt.Printf("Dataset: %d stored missions, %d agent dispatch samples, %d exported KB documents\n", len(ds.Missions), len(ds.Agents), len(ds.KBFiling))
-	fmt.Printf("Gateway URL: %s | Mode: %s\n\n", *gatewayURL, *mode)
+	fmt.Printf("Dataset: %d missions, %d agent dispatch samples, %d KB documents\n", len(ds.Missions), len(ds.Agents), len(ds.KBFiling))
+	fmt.Printf("Gateway URL: %s | Mode: %s\n", *gatewayURL, *mode)
+	fmt.Printf("Accuracy is reported as correct/total = percent [95%% Wilson interval].\n\n")
 
 	if *mode == "simulate" {
 		fmt.Println("Simulation mode disabled. Running live evaluation against gateway.")
 	}
 
-	evaluator := NewEvaluator(*gatewayURL, *route)
-	ctx := context.Background()
+	r := runEval(context.Background(), NewEvaluator(*gatewayURL, *route), ds)
 
-	// 1. Mission Kind & Light Preview (evaluates both Kind and Light against production classifyKindAndLight baseline)
-	fmt.Printf("## Evaluating Site 1 & 2: Mission Kind & Light Preview (%d samples)...\n", len(ds.Missions))
-	kindDecideM, kindClassifyM, lightDecideM, lightClassifyM := evalMissionPreview(ctx, evaluator, ds.Missions)
-	printSiteSummary("Mission Kind Preview", kindDecideM, kindClassifyM)
-	printSiteSummary("Mission Light Preview", lightDecideM, lightClassifyM)
+	printSiteSummary("Mission Kind Preview", r.KindDecide, r.KindClassify)
+	printSiteSummary("Mission Light Preview", r.LightDecide, r.LightClassify)
+	printSiteSummary("Agent Auto-Dispatch", r.AgentDecide, r.AgentClassify)
+	printSiteSummary("KB Collection Filing", r.KBDecide, r.KBClassify)
 
-	// 2. Agent Dispatch (evaluates dispatch against production dispatchPrompt + system line)
-	fmt.Printf("\n## Evaluating Site 3: Agent Auto-Dispatch (%d samples)...\n", len(ds.Agents))
-	agentDecideM, agentClassifyM := evalAgentDispatch(ctx, evaluator, ds.Agents)
-	printSiteSummary("Agent Auto-Dispatch", agentDecideM, agentClassifyM)
-
-	// 3. KB Collection Filing (evaluates filing against production classifySystem + 4000-rune cap)
-	fmt.Printf("\n## Evaluating Site 4: KB Collection Filing (%d samples)...\n", len(ds.KBFiling))
-	kbDecideM, kbClassifyM := evalKBFiling(ctx, evaluator, ds.KBFiling)
-	printSiteSummary("KB Collection Filing", kbDecideM, kbClassifyM)
-
-	// Decision provider label (read from live responses)
-	decideProvider := kindDecideM.Provider
+	decideProvider := r.KindDecide.Provider
 	if decideProvider == "" {
 		decideProvider = "decide route"
 	}
-	if kindDecideM.Model != "" {
-		decideProvider = fmt.Sprintf("%s / %s", decideProvider, kindDecideM.Model)
+	if r.KindDecide.Model != "" {
+		decideProvider = fmt.Sprintf("%s / %s", decideProvider, r.KindDecide.Model)
 	}
 
-	// Overall Table
 	fmt.Println("\n## Benchmark Comparison Results")
 	fmt.Println()
-	fmt.Println("| Evaluation Site | Classifier Mode | Samples | Accuracy | Avg Latency | Tokens / Decision |")
-	fmt.Println("|---|---|---|---|---|---|")
-	printTableRow("Mission Kind", fmt.Sprintf("Decide (%s)", decideProvider), kindDecideM, kindDecideM.AvgTokens())
-	printTableRow("Mission Kind", "Shipping Classifier (stream)", kindClassifyM, kindClassifyM.AvgTokens())
-	printTableRow("Mission Light", fmt.Sprintf("Decide (%s)", decideProvider), lightDecideM, lightDecideM.AvgTokens())
-	printTableRow("Mission Light", "Shipping Classifier (stream)", lightClassifyM, lightClassifyM.AvgTokens())
-	printTableRow("Agent Auto-Dispatch", fmt.Sprintf("Decide (%s)", decideProvider), agentDecideM, agentDecideM.AvgTokens())
-	printTableRow("Agent Auto-Dispatch", "Shipping Classifier (stream)", agentClassifyM, agentClassifyM.AvgTokens())
-	printTableRow("KB Collection Filing", fmt.Sprintf("Decide (%s)", decideProvider), kbDecideM, kbDecideM.AvgTokens())
-	printTableRow("KB Collection Filing", "Shipping Classifier (stream)", kbClassifyM, kbClassifyM.AvgTokens())
+	fmt.Println("| Evaluation Site | Classifier Mode | Accuracy [95% CI] | Avg Latency | Tokens / Decision |")
+	fmt.Println("|---|---|---|---|---|")
+	decideLabel := fmt.Sprintf("Decide (%s)", decideProvider)
+	printTableRow("Mission Kind", decideLabel, r.KindDecide)
+	printTableRow("Mission Kind", "Shipping Classifier (stream)", r.KindClassify)
+	printTableRow("Mission Light", decideLabel, r.LightDecide)
+	printTableRow("Mission Light", "Shipping Classifier (stream)", r.LightClassify)
+	printTableRow("Agent Auto-Dispatch", decideLabel, r.AgentDecide)
+	printTableRow("Agent Auto-Dispatch", "Shipping Classifier (stream)", r.AgentClassify)
+	printTableRow("KB Collection Filing", decideLabel, r.KBDecide)
+	printTableRow("KB Collection Filing", "Shipping Classifier (stream)", r.KBClassify)
 
-	// Latency & Token verification
-	allDecideMetrics := []Metric{kindDecideM, lightDecideM, agentDecideM, kbDecideM}
-	var totalDecideLatency time.Duration
-	var totalDecideCalls int
-	var totalDecideTokens int
-	isNative := false
-	for _, m := range allDecideMetrics {
-		totalDecideLatency += m.Latency
-		totalDecideCalls += m.Total
-		totalDecideTokens += m.TotalTokens
-		if m.Native {
-			isNative = true
-		}
+	var totalLatency time.Duration
+	totalCalls, totalTokens, native, fallback := 0, 0, 0, 0
+	for _, m := range r.decideMetrics() {
+		totalLatency += m.Latency
+		totalCalls += m.Total
+		totalTokens += m.TotalTokens
+		native += m.Native
+		fallback += m.Fallback
 	}
-	avgDecideLatencyMS := int64(0)
-	if totalDecideCalls > 0 {
-		avgDecideLatencyMS = totalDecideLatency.Milliseconds() / int64(totalDecideCalls)
-	}
-	avgDecideTokens := 0
-	if totalDecideCalls > 0 {
-		avgDecideTokens = totalDecideTokens / totalDecideCalls
+	avgLatencyMS, avgTokens := int64(0), 0
+	if totalCalls > 0 {
+		avgLatencyMS = totalLatency.Milliseconds() / int64(totalCalls)
+		avgTokens = totalTokens / totalCalls
 	}
 
 	fmt.Println("\n### Route & Decision Model Status:")
-	if isNative {
-		fmt.Printf("- Model Type: Native Decision Model (provider.Decider)\n")
-		fmt.Printf("- Provider / Model: %s\n", decideProvider)
-	} else {
-		fmt.Printf("- Model Type: LLM Fallback (chat provider)\n")
-		fmt.Printf("- Provider / Model: %s\n", decideProvider)
-	}
+	fmt.Printf("- Decide answers: %d native, %d llm fallback\n", native, fallback)
+	fmt.Printf("- Provider / Model: %s\n", decideProvider)
 
 	fmt.Println("\n### Live Swap Qualification (Agent Auto-Dispatch):")
-	if agentDecideM.Accuracy() >= agentClassifyM.Accuracy() {
-		fmt.Printf("- Agent Auto-Dispatch: MATCH/BEAT (decide %.1f%% >= shipping classifier %.1f%%)\n", agentDecideM.Accuracy(), agentClassifyM.Accuracy())
-	} else {
-		fmt.Printf("- Agent Auto-Dispatch: UNDER BASELINE (decide %.1f%% < shipping classifier %.1f%%)\n", agentDecideM.Accuracy(), agentClassifyM.Accuracy())
-	}
+	fmt.Printf("- Agent Auto-Dispatch: decide %s vs shipping classifier %s: %s\n", r.AgentDecide.Report(), r.AgentClassify.Report(), compare(r.AgentDecide, r.AgentClassify))
 
 	fmt.Println("\n### Unswapped Candidate Benchmark (retained on shipping classifiers):")
-	fmt.Printf("- Mission Kind: decide %.1f%% vs shipping classifier %.1f%%\n", kindDecideM.Accuracy(), kindClassifyM.Accuracy())
-	fmt.Printf("- Mission Light: decide %.1f%% vs shipping classifier %.1f%%\n", lightDecideM.Accuracy(), lightClassifyM.Accuracy())
-	fmt.Printf("- KB Collection Filing: decide %.1f%% vs shipping classifier %.1f%%\n", kbDecideM.Accuracy(), kbClassifyM.Accuracy())
+	fmt.Printf("- Mission Kind: decide %s vs shipping classifier %s: %s\n", r.KindDecide.Report(), r.KindClassify.Report(), compare(r.KindDecide, r.KindClassify))
+	fmt.Printf("- Mission Light: decide %s vs shipping classifier %s: %s\n", r.LightDecide.Report(), r.LightClassify.Report(), compare(r.LightDecide, r.LightClassify))
+	fmt.Printf("- KB Collection Filing: decide %s vs shipping classifier %s: %s\n", r.KBDecide.Report(), r.KBClassify.Report(), compare(r.KBDecide, r.KBClassify))
 
 	fmt.Println("\n### Latency & Token Verification:")
-	if isNative {
-		fmt.Printf("- Swapped Site (Agent Auto-Dispatch) Latency: avg %d ms\n", agentDecideM.AvgLatencyMS())
-		fmt.Printf("- Benchmark Total Latency: avg %d ms across all candidate sites (includes long-text KB scoring)\n", avgDecideLatencyMS)
-		fmt.Printf("- Token consumption: avg %d output tokens per decision\n", avgDecideTokens)
+	fmt.Printf("- Swapped Site (Agent Auto-Dispatch) Latency: avg %d ms\n", r.AgentDecide.AvgLatencyMS())
+	fmt.Printf("- Benchmark Total Latency: avg %d ms across all candidate sites\n", avgLatencyMS)
+	fmt.Printf("- Token consumption: avg %d output tokens per decision\n", avgTokens)
+	if fallback == 0 && native > 0 {
 		fmt.Printf("- Target Latency Ceiling: %d ms (note: issue #1245 target applied to POST /v1/missions/classify when bound to decision models)\n", *maxLatencyMS)
-	} else {
-		fmt.Printf("- Swapped Site (Agent Auto-Dispatch) Latency: avg %d ms\n", agentDecideM.AvgLatencyMS())
-		fmt.Printf("- Benchmark Total Latency: avg %d ms across all candidate sites\n", avgDecideLatencyMS)
-		fmt.Printf("- Token consumption: avg %d output tokens per decision (LLM chat fallback)\n", avgDecideTokens)
 	}
 
-	// Gate Verdict Check:
-	// 1. Swapped decision call sites must match or beat shipping classifier on accuracy.
-	//    Candidate sites that did not qualify on accuracy (Mission Kind, Mission Light, KB Filing)
-	//    remain on shipping classifiers in code.
-	// 2. If -require-native is set, decide route must be served by a native decision model.
-	failedCriteria := []string{}
-	checkSite := func(name string, decideM, classifyM Metric) {
-		if decideM.Total == 0 || decideM.Correct == 0 || decideM.Accuracy() < classifyM.Accuracy() {
-			failedCriteria = append(failedCriteria, fmt.Sprintf("Accuracy on swapped site %s: decide %.1f%% < shipping classifier %.1f%%", name, decideM.Accuracy(), classifyM.Accuracy()))
-		}
-	}
-
-	checkSite("Agent Auto-Dispatch", agentDecideM, agentClassifyM)
-
-	if *requireNative && !isNative {
-		failedCriteria = append(failedCriteria, "Native decision model required (-require-native), but route was served by LLM fallback")
-	}
-
+	failed := gateFailures(r.AgentDecide, r.AgentClassify, *requireNative, r.decideMetrics())
 	fmt.Println("\n### Evaluation Gate Verdict:")
-	if len(failedCriteria) > 0 {
+	if len(failed) > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: Decision model did not meet acceptance criteria:\n")
-		for _, s := range failedCriteria {
+		for _, s := range failed {
 			fmt.Fprintf(os.Stderr, "  - %s\n", s)
 		}
 		os.Exit(1)
 	}
-
-	if isNative {
-		fmt.Printf("PASS: Native decision model matches or exceeds shipping classifier accuracy on swapped sites (%s).\n", decideProvider)
-	} else {
-		fmt.Println("PASS: Decide route matches or exceeds shipping classifier accuracy on swapped sites.")
-	}
+	fmt.Printf("PASS: decide matches or exceeds the shipping classifier on swapped sites (%s).\n", decideProvider)
 }
 
 func printSiteSummary(siteName string, decideM, classifyM Metric) {
-	fmt.Printf("  - Decision Model     : %d/%d (%.1f%%) in avg %dms (%d tokens) [%s]\n",
-		decideM.Correct, decideM.Total, decideM.Accuracy(), decideM.AvgLatencyMS(), decideM.AvgTokens(), decideM.Provider)
-	fmt.Printf("  - Shipping Classifier: %d/%d (%.1f%%) in avg %dms (%d tokens)\n",
-		classifyM.Correct, classifyM.Total, classifyM.Accuracy(), classifyM.AvgLatencyMS(), classifyM.AvgTokens())
+	fmt.Printf("## %s\n", siteName)
+	fmt.Printf("  - Decision Model     : %s in avg %dms (%d tokens) [%s]\n",
+		decideM.Report(), decideM.AvgLatencyMS(), decideM.AvgTokens(), decideM.Provider)
+	fmt.Printf("  - Shipping Classifier: %s in avg %dms (%d tokens)\n",
+		classifyM.Report(), classifyM.AvgLatencyMS(), classifyM.AvgTokens())
 }
 
-func printTableRow(site, mode string, m Metric, tokens int) {
-	fmt.Printf("| %s | %s | %d | %.1f%% | ~%d ms | %d tokens |\n",
-		site, mode, m.Total, m.Accuracy(), m.AvgLatencyMS(), tokens)
+func printTableRow(site, mode string, m Metric) {
+	fmt.Printf("| %s | %s | %s | ~%d ms | %d tokens |\n",
+		site, mode, m.Report(), m.AvgLatencyMS(), m.AvgTokens())
+}
+
+// classifierSystem is the shipping classifiers' system line.
+const classifierSystem = "Answer with only what is requested — no prose, no explanation."
+
+const (
+	kindQuestion  = "Classify this mission goal based on its deliverable, not its topic."
+	lightQuestion = "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?"
+)
+
+// kindOptions are the decide options for a mission's kind.
+func kindOptions() []decideOption {
+	return []decideOption{
+		{ID: "coding", Description: "produces or changes code, scripts, or configuration files in a repository"},
+		{ID: "general", Description: "output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)"},
+	}
+}
+
+// matchKind maps a decide choice to a mission kind, or "" when it is
+// neither option.
+func matchKind(choice string) string {
+	choice = strings.TrimSpace(choice)
+	for _, k := range []string{"coding", "general"} {
+		if strings.EqualFold(choice, k) {
+			return k
+		}
+	}
+	return ""
+}
+
+// matchLight maps a yesno decide choice to the light flag; ok is false
+// for anything else.
+func matchLight(choice string) (light, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "yes":
+		return true, true
+	case "no":
+		return false, true
+	}
+	return false, false
+}
+
+// parseLightReply reads the shipping light classifier's one-word reply.
+func parseLightReply(reply string) bool {
+	lower := strings.ToLower(reply)
+	return strings.Contains(lower, "yes") && !strings.Contains(lower, "no")
 }
 
 // evalMissionPreview evaluates the preview endpoint path (classifyKindAndLightWithDecide vs classifyKindAndLight).
 // The shipping classifier prompt classifies along both axes in one model turn.
-// The decide path calls decide for kind, and if general, calls decide for light.
+// The decide path calls decide for kind, and for general goals decide for light.
 func evalMissionPreview(ctx context.Context, e *Evaluator, missions []MissionSample) (Metric, Metric, Metric, Metric) {
 	var kindDecideM, kindClassifyM Metric
 	var lightDecideM, lightClassifyM Metric
@@ -439,94 +563,47 @@ func evalMissionPreview(ctx context.Context, e *Evaluator, missions []MissionSam
 	kindDecideM.Total = len(missions)
 	kindClassifyM.Total = len(missions)
 
-	// Count general missions for light evaluation
-	generalCount := 0
 	for _, m := range missions {
-		if m.WantKind == "general" {
-			generalCount++
-		}
-	}
-	lightDecideM.Total = generalCount
-	lightClassifyM.Total = generalCount
-
-	const systemPrompt = "Answer with only what is requested — no prose, no explanation."
-
-	for _, m := range missions {
-		// 1. Mission Kind Evaluation:
-		// Shipping classifier (classifyKindAndLight / ClassifyKind prompt)
 		promptKind := "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
 			"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
 			"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
 			"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
 			"Goal: " + m.Goal
-
-		replyKind, tokensKind, durKind, errKind := e.callStream(ctx, systemPrompt, promptKind, "mission_classify")
+		replyKind, tokensKind, durKind, errKind := e.callStream(ctx, classifierSystem, promptKind, "mission_classify")
 		kindClassifyM.Latency += durKind
 		kindClassifyM.TotalTokens += tokensKind
-
 		if errKind == nil {
-			gotKind, _ := parseKindAndLight(replyKind)
-			if gotKind == m.WantKind {
+			if gotKind, _ := parseKindAndLight(replyKind); gotKind == m.WantKind {
 				kindClassifyM.Correct++
 			}
 		}
 
-		// Decide Kind (ClassifyKindWithDecide)
-		qKind := "Classify this mission goal based on its deliverable, not its topic."
-		optionsKind := []decideOption{
-			{ID: "coding", Description: "produces or changes code, scripts, or configuration files in a repository"},
-			{ID: "general", Description: "output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)"},
-		}
-		choiceKind, kindTokens, prov, mod, native, kindDur, kindErr := e.callDecide(ctx, "choice", qKind, m.Goal, optionsKind, "kind")
-		kindDecideM.Latency += kindDur
-		kindDecideM.TotalTokens += kindTokens
-		kindDecideM.Provider = prov
-		kindDecideM.Model = mod
-		kindDecideM.Native = native
-
-		gotDecideKind := ""
-		if kindErr == nil {
-			choiceKind = strings.ToLower(strings.TrimSpace(choiceKind))
-			if choiceKind == "coding" || strings.HasPrefix(choiceKind, "coding") {
-				gotDecideKind = "coding"
-			} else if choiceKind == "general" || strings.HasPrefix(choiceKind, "general") {
-				gotDecideKind = "general"
-			}
-		}
-		if gotDecideKind == m.WantKind {
+		r, err := e.callDecide(ctx, "choice", kindQuestion, m.Goal, kindOptions(), "kind")
+		kindDecideM.addDecide(r, err)
+		if err == nil && matchKind(r.Choice) == m.WantKind {
 			kindDecideM.Correct++
 		}
 
-		// 2. Mission Light Evaluation (general goals only):
-		if m.WantKind == "general" {
-			// Shipping classifier (production classifyLight prompt + system prompt + effort=low)
-			promptLight := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts? Answer with exactly one word, yes or no.\n\n" +
-				"Goal: " + m.Goal
-			replyLight, tokensLight, durLight, errLight := e.callStream(ctx, systemPrompt, promptLight, "light")
-			lightClassifyM.Latency += durLight
-			lightClassifyM.TotalTokens += tokensLight
-			if errLight == nil {
-				replyLower := strings.ToLower(replyLight)
-				isLight := strings.Contains(replyLower, "yes") && !strings.Contains(replyLower, "no")
-				if isLight == m.WantLight {
-					lightClassifyM.Correct++
-				}
-			}
+		if m.WantKind != "general" {
+			continue
+		}
+		lightDecideM.Total++
+		lightClassifyM.Total++
 
-			// Decide Light (production classifyLightWithDecide yes/no)
-			qLight := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?"
-			choiceLight, lightTokens, lprov, lmod, lnative, lightDur, lightErr := e.callDecide(ctx, "yesno", qLight, m.Goal, nil, "light")
-			lightDecideM.Latency += lightDur
-			lightDecideM.TotalTokens += lightTokens
-			lightDecideM.Provider = lprov
-			lightDecideM.Model = lmod
-			lightDecideM.Native = lnative
-			if lightErr == nil {
-				choiceLight = strings.ToLower(strings.TrimSpace(choiceLight))
-				isDecideLight := choiceLight == "yes" || strings.HasPrefix(choiceLight, "yes")
-				if isDecideLight == m.WantLight {
-					lightDecideM.Correct++
-				}
+		promptLight := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts? Answer with exactly one word, yes or no.\n\n" +
+			"Goal: " + m.Goal
+		replyLight, tokensLight, durLight, errLight := e.callStream(ctx, classifierSystem, promptLight, "light")
+		lightClassifyM.Latency += durLight
+		lightClassifyM.TotalTokens += tokensLight
+		if errLight == nil && parseLightReply(replyLight) == m.WantLight {
+			lightClassifyM.Correct++
+		}
+
+		lr, lerr := e.callDecide(ctx, "yesno", lightQuestion, m.Goal, nil, "light")
+		lightDecideM.addDecide(lr, lerr)
+		if lerr == nil {
+			if light, ok := matchLight(lr.Choice); ok && light == m.WantLight {
+				lightDecideM.Correct++
 			}
 		}
 	}
@@ -567,72 +644,98 @@ func parseKindAndLight(reply string) (kind string, light bool) {
 	return kind, kind == "general" && light
 }
 
-func evalAgentDispatch(ctx context.Context, e *Evaluator, agents []AgentSample) (Metric, Metric) {
+// candidateAgents turns a sample's candidates into agents for the
+// production dispatch functions.
+func candidateAgents(cands []AgentCandidate) []agents.Agent {
+	out := make([]agents.Agent, len(cands))
+	for i, c := range cands {
+		out[i] = agents.Agent{ID: c.ID, Name: c.Name, Description: c.Description, Enabled: true}
+	}
+	return out
+}
+
+// evalAgentDispatch runs both paths through the production dispatch
+// code: agents.DispatchWithDecide shapes the decide options and matches
+// the choice; agents.Dispatch builds the numbered prompt and parses the
+// classifier's reply. Fallback id "" marks a miss.
+func evalAgentDispatch(ctx context.Context, e *Evaluator, samples []AgentSample) (Metric, Metric) {
 	var decideM, classifyM Metric
-	decideM.Total = len(agents)
-	classifyM.Total = len(agents)
+	decideM.Total = len(samples)
+	classifyM.Total = len(samples)
 
-	const systemPrompt = "Answer with only what is requested — no prose, no explanation."
-
-	for _, a := range agents {
-		// 1. Decide Path
-		options := make([]decideOption, len(a.Candidates))
-		for i, c := range a.Candidates {
-			options[i] = decideOption{ID: c.Name, Description: c.Description}
+	decideFn := func(ctx context.Context, kind, question, state string, options []agents.DecideOption) (string, error) {
+		opts := make([]decideOption, len(options))
+		for i, o := range options {
+			opts[i] = decideOption{ID: o.ID, Description: o.Description}
 		}
-		qDecide := "Pick the single best-fit assistant profile for the user's message."
-		choice, tokens, prov, mod, native, dur, err := e.callDecide(ctx, "choice", qDecide, a.Message, options, "dispatch")
-		decideM.Latency += dur
-		decideM.TotalTokens += tokens
-		decideM.Provider = prov
-		decideM.Model = mod
-		decideM.Native = native
+		r, err := e.callDecide(ctx, kind, question, state, opts, "dispatch")
+		decideM.addDecide(r, err)
+		return r.Choice, err
+	}
+	classifyFn := func(ctx context.Context, prompt string) (string, error) {
+		reply, tokens, dur, err := e.callStream(ctx, classifierSystem, prompt, "dispatch")
+		classifyM.Latency += dur
+		classifyM.TotalTokens += tokens
+		return reply, err
+	}
 
-		if err == nil {
-			choice = strings.TrimSpace(choice)
-			for _, c := range a.Candidates {
-				if strings.EqualFold(choice, c.Name) || strings.EqualFold(choice, c.ID) {
-					if c.ID == a.WantAgent {
-						decideM.Correct++
-					}
-					break
-				}
-			}
+	for _, a := range samples {
+		cands := candidateAgents(a.Candidates)
+		if agents.DispatchWithDecide(ctx, decideFn, nil, a.Message, cands, "") == a.WantAgent {
+			decideM.Correct++
 		}
-
-		// 2. Shipping Classifier Path (dispatchPrompt + systemPrompt + effort=low)
-		var b strings.Builder
-		b.WriteString("Pick the single best-fit assistant profile for the user's message. Reply with ONLY the number, nothing else.\n\n")
-		for i, c := range a.Candidates {
-			if c.Description != "" {
-				fmt.Fprintf(&b, "%d. %s: %s\n", i+1, c.Name, c.Description)
-			} else {
-				fmt.Fprintf(&b, "%d. %s\n", i+1, c.Name)
-			}
-		}
-		b.WriteString("\nMessage: ")
-		b.WriteString(a.Message)
-
-		reply, streamTokens, streamDur, streamErr := e.callStream(ctx, systemPrompt, b.String(), "dispatch")
-		classifyM.Latency += streamDur
-		classifyM.TotalTokens += streamTokens
-		if streamErr == nil {
-			reply = strings.TrimSpace(reply)
-			end := 0
-			for end < len(reply) && reply[end] >= '0' && reply[end] <= '9' {
-				end++
-			}
-			if end > 0 {
-				var idx int
-				if _, err := fmt.Sscanf(reply[:end], "%d", &idx); err == nil && idx >= 1 && idx <= len(a.Candidates) {
-					if a.Candidates[idx-1].ID == a.WantAgent {
-						classifyM.Correct++
-					}
-				}
-			}
+		if agents.Dispatch(ctx, classifyFn, a.Message, cands, "") == a.WantAgent {
+			classifyM.Correct++
 		}
 	}
 	return decideM, classifyM
+}
+
+// kbNewOption is the decide option that proposes a new collection.
+const kbNewOption = "NEW"
+
+// kbOptions are the decide options for filing into collections.
+func kbOptions(cols []KBCollection) []decideOption {
+	options := make([]decideOption, 0, len(cols)+1)
+	for _, c := range cols {
+		options = append(options, decideOption{ID: c.ID, Description: fmt.Sprintf("%s (%d docs) - %s", c.Name, c.DocCount, c.Description)})
+	}
+	return append(options, decideOption{ID: kbNewOption, Description: "propose a new collection when nothing fits"})
+}
+
+// kbState is the decide state for one document.
+func kbState(doc KBFilingSample) string {
+	return fmt.Sprintf("Document title: %s\n\n%s", doc.Title, truncateRunes(doc.Text, 4000))
+}
+
+// matchKB maps a decide choice to a collection id or NEW, or "".
+func matchKB(choice string, cols []KBCollection) string {
+	choice = strings.TrimSpace(choice)
+	if strings.EqualFold(choice, kbNewOption) {
+		return kbNewOption
+	}
+	for _, c := range cols {
+		if strings.EqualFold(choice, c.ID) {
+			return c.ID
+		}
+	}
+	return ""
+}
+
+// parseKBReply reads the shipping KB classifier's first line: a bare
+// collection id, or a NEW proposal.
+func parseKBReply(reply string, cols []KBCollection) string {
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(reply), "\n")
+	firstLine = strings.TrimSpace(firstLine)
+	if strings.HasPrefix(strings.ToUpper(firstLine), kbNewOption) {
+		return kbNewOption
+	}
+	for _, c := range cols {
+		if firstLine == c.ID {
+			return c.ID
+		}
+	}
+	return ""
 }
 
 func evalKBFiling(ctx context.Context, e *Evaluator, kbFiles []KBFilingSample) (Metric, Metric) {
@@ -644,68 +747,27 @@ func evalKBFiling(ctx context.Context, e *Evaluator, kbFiles []KBFilingSample) (
 	const classifySystem = `You file documents into a knowledge base. Given a document and a list of existing collections, reply with exactly one line: either the bare id of the best-matching existing collection, or "NEW: <name> | <description>" to propose a new collection when nothing fits. Prefer the MOST SPECIFIC existing collection that fits the document's primary topic; propose NEW only when the primary topic is clearly narrower than every existing collection and is a topic more future documents could join. A broad collection is the wrong pick when a narrower on-topic one already exists, or when the document's topic deserves its own collection - do not use a catch-all just because it is easy. A new collection's name must be a SHORT GENERIC TOPIC CATEGORY of 1-3 words (like "AI Agents", "Scalability", "Code Review", "CVs") that many future documents could belong to, never a title describing this specific document. The description should state the topic's scope broadly. No other text.`
 
 	for _, doc := range kbFiles {
+		r, err := e.callDecide(ctx, "choice", decideSystemRule, kbState(doc), kbOptions(doc.Collections), "kb_classify")
+		decideM.addDecide(r, err)
+		if err == nil && matchKB(r.Choice, doc.Collections) == doc.WantChoice {
+			decideM.Correct++
+		}
+
 		var list strings.Builder
-		options := make([]decideOption, 0, len(doc.Collections)+1)
-		for _, c := range doc.Collections {
-			desc := fmt.Sprintf("%s (%d docs) - %s", c.Name, c.DocCount, c.Description)
-			list.WriteString(c.ID + ": " + desc)
-			list.WriteByte('\n')
-			options = append(options, decideOption{ID: c.ID, Description: desc})
-		}
-		options = append(options, decideOption{ID: "NEW", Description: "propose a new collection when nothing fits"})
-
-		truncatedText := truncateRunes(doc.Text, 4000)
-
-		// 1. Decide Path
-		state := fmt.Sprintf("Document title: %s\n\n%s", doc.Title, truncatedText)
-		choice, tokens, prov, mod, native, dur, err := e.callDecide(ctx, "choice", decideSystemRule, state, options, "kb_classify")
-		decideM.Latency += dur
-		decideM.TotalTokens += tokens
-		decideM.Provider = prov
-		decideM.Model = mod
-		decideM.Native = native
-
-		if err == nil {
-			choice = strings.TrimSpace(choice)
-			if strings.EqualFold(choice, "NEW") {
-				if doc.WantChoice == "NEW" {
-					decideM.Correct++
-				}
-			} else {
-				for _, c := range doc.Collections {
-					if strings.EqualFold(choice, c.ID) {
-						if c.ID == doc.WantChoice {
-							decideM.Correct++
-						}
-						break
-					}
-				}
+		for _, o := range kbOptions(doc.Collections) {
+			if o.ID == kbNewOption {
+				continue
 			}
+			list.WriteString(o.ID + ": " + o.Description)
+			list.WriteByte('\n')
 		}
-
-		// 2. Shipping Classifier Path (classifySystem + 4000 runes + effort=low)
 		userPrompt := fmt.Sprintf("Existing collections:\n%s\nDocument title: %s\n\n%s",
-			list.String(), doc.Title, truncatedText)
+			list.String(), doc.Title, truncateRunes(doc.Text, 4000))
 		reply, streamTokens, streamDur, streamErr := e.callStream(ctx, classifySystem, userPrompt, "kb_classify")
 		classifyM.Latency += streamDur
 		classifyM.TotalTokens += streamTokens
-		if streamErr == nil {
-			firstLine, _, _ := strings.Cut(strings.TrimSpace(reply), "\n")
-			firstLine = strings.TrimSpace(firstLine)
-			if strings.HasPrefix(strings.ToUpper(firstLine), "NEW") {
-				if doc.WantChoice == "NEW" {
-					classifyM.Correct++
-				}
-			} else {
-				for _, c := range doc.Collections {
-					if firstLine == c.ID {
-						if c.ID == doc.WantChoice {
-							classifyM.Correct++
-						}
-						break
-					}
-				}
-			}
+		if streamErr == nil && parseKBReply(reply, doc.Collections) == doc.WantChoice {
+			classifyM.Correct++
 		}
 	}
 	return decideM, classifyM
