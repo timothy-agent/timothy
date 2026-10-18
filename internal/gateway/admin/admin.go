@@ -77,11 +77,12 @@ type Admin struct {
 	budgets *ledger.BudgetStore
 	secrets *secretstore.Store
 	catalog *catalog.Store
+	models  *modelsCache
 	log     *slog.Logger
 }
 
 func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, secrets *secretstore.Store, cat *catalog.Store, log *slog.Logger) *Admin {
-	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, catalog: cat, log: log}
+	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, catalog: cat, models: newModelsCache(), log: log}
 }
 
 // SetSecret pins refName's value to built-in storage regardless of the
@@ -1436,44 +1437,6 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 	return res, nil
 }
 
-// AvailableModels proxies the provider's own model-listing endpoint.
-// Drivers that cannot enumerate models (bedrock) return an error the
-// UI turns into its manual-entry fallback. kind='cli' rows never build
-// a chat driver (D-051, BuildSnapshot skips them entirely) so they
-// never reach the serving snapshot below; cursor-cli is the one cli
-// driver with a listing endpoint of its own, called directly.
-func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.AvailableModel, error) {
-	p, err := a.get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if p.Kind == "cli" {
-		if p.Driver != "cursor-cli" {
-			return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
-		}
-		return a.cursorAvailableModels(ctx, p)
-	}
-	snap := a.store.Snapshot()
-	if snap == nil {
-		return nil, fmt.Errorf("routing configuration not loaded yet")
-	}
-	drv, ok := snap.Provider(p.Name)
-	if !ok {
-		return nil, fmt.Errorf("provider %s not in the serving snapshot; wait for the next reload", p.Name)
-	}
-	lister, ok := drv.(provider.ModelLister)
-	if !ok {
-		return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
-	}
-	lctx, cancel := context.WithTimeout(ctx, testTimeout)
-	defer cancel()
-	models, err := lister.ListModels(lctx)
-	if err != nil {
-		return nil, err
-	}
-	return cliproxyVendorModels(p, models), nil
-}
-
 // cliproxyVendorModels keeps only the ids a cliproxy row's vendor
 // serves (catalog.CliproxyServes); other rows pass through unchanged.
 func cliproxyVendorModels(p Provider, models []provider.AvailableModel) []provider.AvailableModel {
@@ -1667,9 +1630,8 @@ func (a *Admin) probeResponses(ctx context.Context, baseURL, credentialRef, mode
 
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
-	ErrNotFound    = fmt.Errorf("not found")
-	ErrInUse       = fmt.Errorf("in use")
-	ErrUnsupported = fmt.Errorf("unsupported")
+	ErrNotFound = fmt.Errorf("not found")
+	ErrInUse    = fmt.Errorf("in use")
 	// ErrUpstream marks a failure reaching a third-party API the gateway
 	// itself calls out to (e.g. Cursor's model listing): a 502, not a
 	// 400, since the request was fine but the upstream wasn't reachable.

@@ -202,10 +202,10 @@ func rankedMatches(entries []Entry, qLower string, limit int, chatFirst bool, ke
 	return out
 }
 
-// chatLike is a mode a person picks as a chat/default model. Other
+// ChatLike is a mode a person picks as a chat/default model. Other
 // modes (embedding, image, audio, moderation) stay in the catalog but
 // sort after these when a list is capped.
-func chatLike(mode string) bool {
+func ChatLike(mode string) bool {
 	switch mode {
 	case "chat", "completion", "responses":
 		return true
@@ -218,7 +218,7 @@ func chatFirstModels(models []Model) []Model {
 	chat := make([]Model, 0, len(models))
 	rest := make([]Model, 0)
 	for _, m := range models {
-		if chatLike(m.Mode) {
+		if ChatLike(m.Mode) {
 			chat = append(chat, m)
 		} else {
 			rest = append(rest, m)
