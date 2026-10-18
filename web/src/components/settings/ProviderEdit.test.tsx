@@ -1098,3 +1098,125 @@ describe('ProviderEdit bedrock credential panel', () => {
     expect(screen.queryByText(/JSON/)).not.toBeInTheDocument()
   })
 })
+
+describe('ProviderEdit advanced fold', () => {
+  const openrouterProvider: AdminProvider = {
+    id: 'p-or',
+    name: 'OpenRouter',
+    kind: 'api',
+    driver: 'openaicompat',
+    base_url: 'https://openrouter.ai/api/v1',
+    default_model: 'openai/gpt-4o-mini',
+    credential_ref: 'OPENROUTER_API_KEY',
+    headers: {},
+    enabled: true,
+  }
+
+  function advancedFold(): HTMLDetailsElement {
+    return screen.getByText('Advanced', { selector: 'summary' }).closest('details')!
+  }
+
+  it('holds the operator fields and stays closed when every value is the default', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openrouterProvider])
+    renderPage('p-or')
+
+    await screen.findByDisplayValue('OpenRouter')
+    const fold = advancedFold()
+    expect(fold.open).toBe(false)
+    expect(fold).toContainElement(screen.getByRole('switch', { name: 'Disable reasoning' }))
+    expect(fold).toContainElement(screen.getByPlaceholderText('5m'))
+    expect(fold).toContainElement(screen.getByLabelText('Base URL'))
+    expect(fold).not.toContainElement(screen.getByDisplayValue('OpenRouter'))
+    expect(fold).not.toContainElement(screen.getByText('Default model'))
+  })
+
+  it.each([
+    ['reasoning is disabled', { options: { reasoning_effort: 'none' } }],
+    ['a request timeout is set', { options: { request_timeout: '20m' } }],
+    ['a LiteLLM provider is set', { options: { litellm_provider: 'openrouter' } }],
+    ['the base URL differs from the preset', { base_url: 'https://openrouter.ai/api/v2' }],
+  ])('opens by itself when %s', async (_name, override) => {
+    vi.mocked(listProviders).mockResolvedValue([{ ...openrouterProvider, ...override }])
+    renderPage('p-or')
+
+    await screen.findByDisplayValue('OpenRouter')
+    expect(advancedFold().open).toBe(true)
+  })
+
+  it('ignores a trailing slash when comparing the base URL with the preset', async () => {
+    vi.mocked(listProviders).mockResolvedValue([{ ...openrouterProvider, base_url: 'https://openrouter.ai/api/v1/' }])
+    renderPage('p-or')
+
+    await screen.findByDisplayValue('OpenRouter')
+    expect(advancedFold().open).toBe(false)
+  })
+
+  it('shows the base URL read-only and leaves it out of the PATCH', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openrouterProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p-or')
+
+    await screen.findByDisplayValue('OpenRouter')
+    const baseURL = screen.getByLabelText('Base URL')
+    expect(baseURL).toHaveValue('https://openrouter.ai/api/v1')
+    expect(baseURL).toHaveAttribute('readonly')
+
+    fireEvent.change(screen.getByPlaceholderText('5m'), { target: { value: '20m' } })
+    fireEvent.click(formSaveButton())
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(patchProvider).mock.calls[0][1]).not.toHaveProperty('base_url')
+  })
+
+  it('keeps the bedrock region in the main form and renders no fold', async () => {
+    renderPage('p1')
+
+    const region = await screen.findByRole('combobox', { name: 'AWS region' })
+    expect(region.closest('details')).toBeNull()
+    expect(screen.queryByText('Advanced', { selector: 'summary' })).not.toBeInTheDocument()
+  })
+
+  it('renders no fold for a cli provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    renderPage('p3')
+
+    await screen.findByDisplayValue('Claude Code')
+    expect(screen.queryByText('Advanced', { selector: 'summary' })).not.toBeInTheDocument()
+  })
+
+  it('says nothing about embeddings or image models in the models panel', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openrouterProvider])
+    vi.mocked(availableModels).mockResolvedValue([{ id: 'openai/gpt-4o-mini', source: 'live' }])
+    renderPage('p-or')
+
+    await screen.findByText('Models your key can use · 1')
+    expect(screen.queryByText(/embedding/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/image model/i)).not.toBeInTheDocument()
+  })
+
+  it('buildPatch output for a fully staged provider is unchanged', () => {
+    const patch = buildPatch(
+      { ...openrouterProvider, options: { anthropic_base_url: 'https://example.test', reasoning_effort: 'none' } },
+      {
+        name: ' OpenRouter 2 ',
+        credential_ref: 'OR_KEY',
+        reasoningDisabled: false,
+        request_timeout: ' 20m ',
+        region: 'eu-west-1',
+        auth: 'ambient',
+        litellm_provider: ' openrouter ',
+        default_model: ' openai/gpt-4o ',
+      },
+    )
+    expect(patch).toEqual({
+      name: 'OpenRouter 2',
+      credential_ref: 'OR_KEY',
+      default_model: 'openai/gpt-4o',
+      options: {
+        anthropic_base_url: 'https://example.test',
+        request_timeout: '20m',
+        litellm_provider: 'openrouter',
+      },
+    })
+  })
+})
