@@ -843,7 +843,8 @@ func TestCalendarToolsRoundTrip(t *testing.T) {
 	f := &fakeGoogle{}
 	src, _ := connectedSource(t, f)
 
-	out, err := toolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := toolByName(t, src, "list_calendar_events").Execute(t.Context(),
+		json.RawMessage(`{"time_min":"2026-07-22T00:00:00Z","time_max":"2026-07-22T23:59:59Z"}`))
 	if err != nil || !strings.Contains(out, "standup") || !strings.Contains(out, "zoom") {
 		t.Fatalf("list = (%q, %v)", out, err)
 	}
@@ -854,6 +855,32 @@ func TestCalendarToolsRoundTrip(t *testing.T) {
 	}
 	if len(f.events) != 1 || f.events[0]["summary"] != "1:1" {
 		t.Fatalf("created event = %+v", f.events)
+	}
+}
+
+func TestGoogleCalendarListEventsValidation(t *testing.T) {
+	t.Parallel()
+	f := &fakeGoogle{}
+	src, _ := connectedSource(t, f)
+	tl := toolByName(t, src, "list_calendar_events")
+
+	for _, tc := range []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"missing both", `{}`, "time_min and time_max are required"},
+		{"missing time_max", `{"time_min":"2026-07-22T00:00:00Z"}`, "time_min and time_max are required"},
+		{"missing time_min", `{"time_max":"2026-07-22T23:59:59Z"}`, "time_min and time_max are required"},
+		{"invalid time_min", `{"time_min":"bad","time_max":"2026-07-22T23:59:59Z"}`, "time_min must be RFC3339"},
+		{"invalid time_max", `{"time_min":"2026-07-22T00:00:00Z","time_max":"bad"}`, "time_max must be RFC3339"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tl.Execute(t.Context(), json.RawMessage(tc.input))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Execute(%s) err = %v, want substring %q", tc.input, err, tc.wantErr)
+			}
+		})
 	}
 }
 

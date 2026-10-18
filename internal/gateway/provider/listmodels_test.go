@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -235,4 +237,145 @@ func TestBedrockListModelsErrors(t *testing.T) {
 			t.Fatal("control plane called despite a config error")
 		}
 	})
+}
+
+func TestPerMTok(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want *float64
+	}{
+		{name: "paid", raw: `"0.0000025"`, want: fptr(2.5)},
+		{name: "exponent", raw: `"1e-6"`, want: fptr(1)},
+		{name: "free", raw: `"0"`, want: fptr(0)},
+		{name: "missing", raw: ``, want: nil},
+		{name: "null", raw: `null`, want: nil},
+		{name: "empty string", raw: `""`, want: nil},
+		{name: "malformed string", raw: `"abc"`, want: nil},
+		{name: "variable price", raw: `"-1"`, want: nil},
+		{name: "not a number", raw: `"NaN"`, want: nil},
+		{name: "infinite", raw: `"Inf"`, want: nil},
+		{name: "number not string", raw: `0.000001`, want: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := perMTok(json.RawMessage(tc.raw))
+			if !sameFloat(got, tc.want) {
+				t.Fatalf("perMTok(%s) = %v, want %v", tc.raw, deref(got), deref(tc.want))
+			}
+		})
+	}
+}
+
+// openRouterModels is a trimmed OpenRouter-shaped /models reply: a paid
+// model, a :free model, a variable-price router, malformed values and
+// an entry without pricing.
+const openRouterModels = `{"data":[
+	{"id":"openai/gpt-4o","name":"OpenAI: GPT-4o","context_length":128000,
+	 "pricing":{"prompt":"0.0000025","completion":"0.00001","request":"0","input_cache_read":"0.00000125"}},
+	{"id":"meta-llama/llama-3.3-70b-instruct:free","context_length":65536,
+	 "pricing":{"prompt":"0","completion":"0"}},
+	{"id":"openrouter/auto","context_length":null,"pricing":{"prompt":"-1","completion":"-1"}},
+	{"id":"broken/model","context_length":"lots","pricing":{"prompt":"cheap","completion":0.00001}},
+	{"id":"bare/model"}
+]}`
+
+// The pricing block is read by shape on any host (an aggregator such as
+// Kilo here), not only on openrouter.ai.
+func TestOpenAICompatListModelsListingPricing(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(openRouterModels))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAICompat(OpenAICompatConfig{
+		Name: "kilo", BaseURL: srv.URL + "/api/openrouter", APIKey: "k", Timeout: 10 * time.Second,
+	})
+
+	models, err := p.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if gotPath != "/api/openrouter/models" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	assertModels(t, models, []AvailableModel{
+		{ID: "openai/gpt-4o", InputPerMTok: fptr(2.5), OutputPerMTok: fptr(10), CacheReadPerMTok: fptr(1.25), ContextLength: iptr(128000)},
+		{ID: "meta-llama/llama-3.3-70b-instruct:free", InputPerMTok: fptr(0), OutputPerMTok: fptr(0), ContextLength: iptr(65536)},
+		{ID: "openrouter/auto"},
+		{ID: "broken/model"},
+		{ID: "bare/model"},
+	})
+}
+
+// A real listing with no pricing block (marsai) states no price; its
+// non-standard access field is not one.
+func TestOpenAICompatListModelsWithoutPricing(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"marsai/auto-free","object":"model","created":1791880906,"owned_by":"mars","label":"Free","label_color":"#6366f1","access":"free"},{"id":"marsai/claude-opus-4-7","object":"model","created":1791306238,"owned_by":"mars"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAICompat(OpenAICompatConfig{Name: "marsai", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
+
+	models, err := p.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	assertModels(t, models, []AvailableModel{{ID: "marsai/auto-free"}, {ID: "marsai/claude-opus-4-7"}})
+}
+
+// Only the openaicompat driver reads listing prices.
+func TestAnthropicListModelsIgnoresPricing(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(openRouterModels))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewAnthropic(AnthropicConfig{Name: "ant", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
+
+	models, err := p.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	assertModels(t, models, []AvailableModel{
+		{ID: "openai/gpt-4o"}, {ID: "meta-llama/llama-3.3-70b-instruct:free"},
+		{ID: "openrouter/auto"}, {ID: "broken/model"}, {ID: "bare/model"},
+	})
+}
+
+func assertModels(t *testing.T, got, want []AvailableModel) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d models %+v, want %d", len(got), got, len(want))
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.ID != w.ID || !sameFloat(g.InputPerMTok, w.InputPerMTok) || !sameFloat(g.OutputPerMTok, w.OutputPerMTok) ||
+			!sameFloat(g.CacheReadPerMTok, w.CacheReadPerMTok) || !sameFloat(g.CacheWritePerMTok, w.CacheWritePerMTok) ||
+			(g.ContextLength == nil) != (w.ContextLength == nil) || (g.ContextLength != nil && *g.ContextLength != *w.ContextLength) {
+			t.Fatalf("model %d = %+v, want %+v", i, g, w)
+		}
+	}
+}
+
+func fptr(v float64) *float64 { return &v }
+func iptr(v int64) *int64     { return &v }
+
+func deref(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func sameFloat(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return math.Abs(*a-*b) < 1e-9
 }

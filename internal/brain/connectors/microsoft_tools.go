@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -459,12 +460,12 @@ func (s *microsoftSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "list_calendar_events",
 		ReadOnly:    true,
-		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event. Do not use this to search mail for an invitation or a booking confirmation; use search_mail for that. This tool lists a calendar window, it does not search by keyword.",
+		Description: "List events from the connected calendar in a time window. Returns start, end, title, and location per event. Pass time_min and time_max as RFC3339 timestamps computed from the current date and goal intent (e.g. today 00:00 to 23:59 for today's agenda, or next 7 days for a weekly overview). Do not use this to search mail for an invitation or a booking confirmation; use search_mail for that. This tool lists a calendar window, it does not search by keyword.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"time_min":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
-			"time_max":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
+			"time_min":{"type":"string","description":"RFC3339 timestamp for start of window"},
+			"time_max":{"type":"string","description":"RFC3339 timestamp for end of window"},
 			"max_results":{"type":"integer","minimum":1,"maximum":50}
-		},"additionalProperties":false}`),
+		},"required":["time_min","time_max"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var in struct {
 				TimeMin    string `json:"time_min"`
@@ -474,11 +475,14 @@ func (s *microsoftSource) calendarListEvents() *tools.Tool {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return "", err
 			}
-			if in.TimeMin == "" {
-				in.TimeMin = time.Now().Format("2006-01-02T15:04:05Z07:00")
+			if in.TimeMin == "" || in.TimeMax == "" {
+				return "", errors.New("time_min and time_max are required RFC3339 timestamps")
 			}
-			if in.TimeMax == "" {
-				in.TimeMax = time.Now().AddDate(0, 0, 7).Format("2006-01-02T15:04:05Z07:00")
+			if _, err := time.Parse(time.RFC3339, in.TimeMin); err != nil {
+				return "", fmt.Errorf("time_min must be RFC3339, e.g. 2026-07-22T15:00:00Z: %w", err)
+			}
+			if _, err := time.Parse(time.RFC3339, in.TimeMax); err != nil {
+				return "", fmt.Errorf("time_max must be RFC3339, e.g. 2026-07-22T15:00:00Z: %w", err)
 			}
 			if in.MaxResults <= 0 {
 				in.MaxResults = 20

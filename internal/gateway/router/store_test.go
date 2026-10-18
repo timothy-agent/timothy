@@ -193,6 +193,24 @@ func TestApplyProviderOptionsPricesByModel(t *testing.T) {
 	}
 }
 
+func TestApplyProviderOptionsListingPrices(t *testing.T) {
+	t.Parallel()
+	for options, wantOff := range map[string]bool{
+		`{}`:                          false,
+		`{"listing_prices": "on"}`:    false,
+		`{"listing_prices": "off"}`:   true,
+		`{"listing_prices": "maybe"}`: false,
+	} {
+		var row ProviderRow
+		if err := applyProviderOptions(&row, []byte(options)); err != nil {
+			t.Fatalf("applyProviderOptions(%s): %v", options, err)
+		}
+		if row.ListingPricesOff != wantOff {
+			t.Fatalf("applyProviderOptions(%s): ListingPricesOff = %v, want %v", options, row.ListingPricesOff, wantOff)
+		}
+	}
+}
+
 func TestApplyProviderOptionsAuth(t *testing.T) {
 	t.Parallel()
 	var row ProviderRow

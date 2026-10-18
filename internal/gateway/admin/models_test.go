@@ -53,6 +53,12 @@ func staticFetch(ids ...string) modelFetch {
 	}
 }
 
+func modelsFetch(models ...provider.AvailableModel) modelFetch {
+	return func(context.Context) ([]provider.AvailableModel, error) {
+		return models, nil
+	}
+}
+
 func ptrF(v float64) *float64 { return &v }
 func ptrI(v int64) *int64     { return &v }
 
@@ -82,14 +88,14 @@ func TestModelList(t *testing.T) {
 			name:  "live join carries catalog price and context",
 			p:     openai,
 			fetch: staticFetch("gpt-4o"),
-			want: []ListedModel{{ID: "gpt-4o", Source: "live",
+			want: []ListedModel{{ID: "gpt-4o", Source: "live", PriceSource: "catalog",
 				InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)}},
 		},
 		{
 			name:  "non chat-like match is dropped",
 			p:     openai,
 			fetch: staticFetch("gpt-image-1", "gpt-realtime", "text-embedding-3-small", "gpt-4o"),
-			want: []ListedModel{{ID: "gpt-4o", Source: "live",
+			want: []ListedModel{{ID: "gpt-4o", Source: "live", PriceSource: "catalog",
 				InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)}},
 		},
 		{
@@ -98,14 +104,66 @@ func TestModelList(t *testing.T) {
 			fetch: staticFetch("ft:gpt-4o:acme", "gpt-4o"),
 			want: []ListedModel{
 				{ID: "ft:gpt-4o:acme", Source: "live"},
-				{ID: "gpt-4o", Source: "live", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)},
+				{ID: "gpt-4o", Source: "live", PriceSource: "catalog", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)},
 			},
 		},
 		{
 			name:  "match without a mode stays",
 			p:     openai,
 			fetch: staticFetch("gpt-modeless"),
-			want:  []ListedModel{{ID: "gpt-modeless", Source: "live", InputPerMTok: ptrF(1)}},
+			want:  []ListedModel{{ID: "gpt-modeless", Source: "live", PriceSource: "catalog", InputPerMTok: ptrF(1)}},
+		},
+		{
+			name: "listing price and context used when the catalog has no match",
+			p:    Provider{ID: "p-or", Name: "OpenRouter", Kind: "api", Driver: "openaicompat", BaseURL: "https://openrouter.ai/api/v1"},
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "openai/gpt-4o", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(10), ContextLength: ptrI(128000)},
+				provider.AvailableModel{ID: "meta-llama/llama-3.3-70b-instruct:free", InputPerMTok: ptrF(0), OutputPerMTok: ptrF(0)},
+				provider.AvailableModel{ID: "openrouter/auto"},
+			),
+			want: []ListedModel{
+				{ID: "openai/gpt-4o", Source: "live", PriceSource: "listing", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(10), MaxInputTokens: ptrI(128000)},
+				{ID: "meta-llama/llama-3.3-70b-instruct:free", Source: "live", PriceSource: "listing", InputPerMTok: ptrF(0), OutputPerMTok: ptrF(0)},
+				{ID: "openrouter/auto", Source: "live"},
+			},
+		},
+		{
+			name: "listing price wins over the catalog, catalog fills empty fields",
+			p:    openai,
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "gpt-4o", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(9)},
+				provider.AvailableModel{ID: "gpt-modeless", OutputPerMTok: ptrF(7), ContextLength: ptrI(4096)},
+			),
+			want: []ListedModel{
+				{ID: "gpt-4o", Source: "live", PriceSource: "listing", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(9), MaxInputTokens: ptrI(128000)},
+				{ID: "gpt-modeless", Source: "live", PriceSource: "catalog", InputPerMTok: ptrF(1), MaxInputTokens: ptrI(4096)},
+			},
+		},
+		{
+			name: "listing_prices off falls back to the catalog",
+			p: Provider{ID: "p-openai-off", Name: "OpenAI", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
+				Options: map[string]string{"listing_prices": "off"}},
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "gpt-4o", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(9)},
+				provider.AvailableModel{ID: "house-model", InputPerMTok: ptrF(1), OutputPerMTok: ptrF(1)},
+			),
+			want: []ListedModel{
+				{ID: "gpt-4o", Source: "live", PriceSource: "catalog", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)},
+				{ID: "house-model", Source: "live"},
+			},
+		},
+		{
+			name: "operator price wins over listing and catalog",
+			p: Provider{ID: "p-openai-op", Name: "OpenAI", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
+				Options: map[string]string{"prices_by_model": `{"gpt-4o":{"input_per_mtok":1,"output_per_mtok":3},"house-model":{"input_per_mtok":0,"output_per_mtok":0}}`}},
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "gpt-4o", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(9)},
+				provider.AvailableModel{ID: "house-model"},
+			),
+			want: []ListedModel{
+				{ID: "gpt-4o", Source: "live", PriceSource: "operator", InputPerMTok: ptrF(1), OutputPerMTok: ptrF(3), MaxInputTokens: ptrI(128000)},
+				{ID: "house-model", Source: "live", PriceSource: "operator", InputPerMTok: ptrF(0), OutputPerMTok: ptrF(0)},
+			},
 		},
 		{
 			name:  "unmapped host keeps every live id unpriced",
@@ -117,7 +175,7 @@ func TestModelList(t *testing.T) {
 			name:  "cliproxy row keeps its own vendor only",
 			p:     Provider{ID: "p-claude-sub", Name: "Claude Subscription", Kind: "api", Driver: "openaicompat", BaseURL: "http://cliproxy:8317/v1"},
 			fetch: staticFetch("claude-sonnet-4-5", "gpt-4o", "gpt-image-1", "codex-auto-review"),
-			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "live",
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "live", PriceSource: "catalog",
 				InputPerMTok: ptrF(3), OutputPerMTok: ptrF(15), MaxInputTokens: ptrI(200000)}},
 		},
 		{
@@ -146,15 +204,23 @@ func TestModelList(t *testing.T) {
 			p: Provider{ID: "p-mars-anthropic", Name: "mars-ai", Kind: "api", Driver: "openaicompat", BaseURL: "https://mars-ai.example.com/v1",
 				DefaultModel: "m-custom", Options: map[string]string{"litellm_provider": "anthropic"}},
 			fetch: nil,
-			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog",
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog", PriceSource: "catalog",
 				InputPerMTok: ptrF(3), OutputPerMTok: ptrF(15), MaxInputTokens: ptrI(200000)}},
 		},
 		{
 			name:  "claude-cli falls back to anthropic rows",
 			p:     Provider{ID: "p-cc", Name: "Claude Code", Kind: "cli", Driver: "claude-cli"},
 			fetch: nil,
-			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog",
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog", PriceSource: "catalog",
 				InputPerMTok: ptrF(3), OutputPerMTok: ptrF(15), MaxInputTokens: ptrI(200000)}},
+		},
+		{
+			name: "catalog fallback with an operator price",
+			p: Provider{ID: "p-cc-op", Name: "Claude Code", Kind: "cli", Driver: "claude-cli",
+				Options: map[string]string{"prices_by_model": `{"claude-sonnet-4-5":{"input_per_mtok":2,"output_per_mtok":10}}`}},
+			fetch: nil,
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog", PriceSource: "operator",
+				InputPerMTok: ptrF(2), OutputPerMTok: ptrF(10), MaxInputTokens: ptrI(200000)}},
 		},
 	}
 	for _, tc := range tests {
@@ -172,7 +238,7 @@ func TestModelList(t *testing.T) {
 			}
 			for i, w := range tc.want {
 				g := got[i]
-				if g.ID != w.ID || g.Source != w.Source || g.DisplayName != w.DisplayName ||
+				if g.ID != w.ID || g.Source != w.Source || g.DisplayName != w.DisplayName || g.PriceSource != w.PriceSource ||
 					!sameF(g.InputPerMTok, w.InputPerMTok) || !sameF(g.OutputPerMTok, w.OutputPerMTok) ||
 					!sameI(g.MaxInputTokens, w.MaxInputTokens) {
 					t.Fatalf("row %d = %+v, want %+v", i, g, w)
@@ -245,13 +311,13 @@ func TestModelsCacheExpires(t *testing.T) {
 func TestListedModelJSONShape(t *testing.T) {
 	b, err := json.Marshal([]ListedModel{
 		{ID: "house-model", Source: "live"},
-		{ID: "gpt-4o", DisplayName: "GPT-4o", Source: "catalog", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)},
+		{ID: "gpt-4o", DisplayName: "GPT-4o", Source: "catalog", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000), PriceSource: "catalog"},
 	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	want := `[{"id":"house-model","source":"live","input_per_mtok":null,"output_per_mtok":null,"max_input_tokens":null},` +
-		`{"id":"gpt-4o","display_name":"GPT-4o","source":"catalog","input_per_mtok":2,"output_per_mtok":8,"max_input_tokens":128000}]`
+		`{"id":"gpt-4o","display_name":"GPT-4o","source":"catalog","input_per_mtok":2,"output_per_mtok":8,"max_input_tokens":128000,"price_source":"catalog"}]`
 	if string(b) != want {
 		t.Fatalf("json = %s\nwant   %s", b, want)
 	}

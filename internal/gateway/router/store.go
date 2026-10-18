@@ -29,6 +29,7 @@ type Store struct {
 	cat    catalogLookup
 	log    *slog.Logger
 	snap   atomic.Pointer[Snapshot]
+	live   *livePrices
 }
 
 // NewStore wires a store; call Run to start loading. cat is the model
@@ -36,7 +37,7 @@ type Store struct {
 // providers.models column — nil is safe (capability gating and
 // pricing both fall back permissively/unpriced).
 func NewStore(db *pgpool.Pool, lookup func(string) string, cat catalogLookup, log *slog.Logger) *Store {
-	return &Store{db: db, lookup: lookup, cat: cat, log: log}
+	return &Store{db: db, lookup: lookup, cat: cat, log: log, live: newLivePrices()}
 }
 
 // Snapshot returns the current snapshot, nil before the first
@@ -61,6 +62,7 @@ func (s *Store) Run(ctx context.Context) {
 			continue
 		}
 	}
+	go s.runLivePrices(ctx)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -73,6 +75,21 @@ func (s *Store) Run(ctx context.Context) {
 				// Keep serving the last good snapshot.
 				s.log.Warn("config reload failed", "error", err)
 			}
+		}
+	}
+}
+
+// runLivePrices relists on its own ticker so a slow listing never
+// delays a config reload. It returns when ctx ends.
+func (s *Store) runLivePrices(ctx context.Context) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -154,6 +171,7 @@ func (s *Store) Load(ctx context.Context) error {
 	}
 
 	snap, warnings := BuildSnapshot(provRows, routes, s.lookup, s.cat)
+	snap.live = s.live
 	for _, w := range warnings {
 		s.log.Warn("router: provider failed to build; marked unhealthy", "provider", w.Provider, "error", w.Err)
 	}
@@ -227,6 +245,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 		OpenAIResponses        string `json:"openai_responses"`
 		LitellmProvider        string `json:"litellm_provider"`
 		PricesByModel          string `json:"prices_by_model"`
+		ListingPrices          string `json:"listing_prices"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
@@ -241,6 +260,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	row.Auth = opts.Auth
 	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	row.LitellmProvider = opts.LitellmProvider
+	row.ListingPricesOff = opts.ListingPrices == "off"
 	if opts.PricesByModel != "" {
 		if err := json.Unmarshal([]byte(opts.PricesByModel), &row.PricesByModel); err != nil {
 			return fmt.Errorf("prices_by_model: %w", err)
