@@ -119,20 +119,25 @@ func ViaChat(ctx context.Context, p provider.Provider, model string, req provide
 	return res, usage, err
 }
 
+// replyTrim is what Parse strips from both ends of a reply.
+const replyTrim = " \t\r\n\"'`*."
+
 // Parse maps a chat model's reply onto the request's answer set. After
 // trimming whitespace, quotes, emphasis and periods, a choice must
 // equal one option's id case-insensitively, or echo one option's full
 // prompt line; the result is that option's id as given. Anything else
 // is ErrMalformed.
 func Parse(req provider.DecideRequest, text string) (provider.DecideResult, error) {
-	answer := strings.Trim(text, " \t\r\n\"'`*.")
+	answer := strings.Trim(text, replyTrim)
 	for _, o := range req.Options {
 		if strings.EqualFold(answer, o.ID) {
 			return provider.DecideResult{Choice: o.ID}, nil
 		}
 	}
 	for _, o := range req.Options {
-		if strings.EqualFold(answer, o.Label()) {
+		// The label gets the reply's trim so a description ending in a
+		// period still matches its echo.
+		if strings.EqualFold(answer, strings.Trim(o.Label(), replyTrim)) {
 			return provider.DecideResult{Choice: o.ID}, nil
 		}
 	}

@@ -3,97 +3,284 @@
     {
       "goal": "Add a CHANGELOG.md file at the repository root with a version heading and one bullet point describing the initial release.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add a SECURITY.md file at the repository root describing how to report a vulnerability.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add an .editorconfig file at the repository root with root=true and basic UTF-8/LF settings.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add a docs/FAQ.md file with two short frequently-asked questions and answers about this repo.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add two files at the repository root, planned as two separate units: CHANGELOG.md with a version heading and one bullet point describing the initial release, and CONTRIBUTING.md with a short section on how to propose a change.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add two files, planned as two separate units: SECURITY.md at the repository root describing how to report a vulnerability, and docs/USAGE.md with a short Usage section explaining what this fixture repo is for.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Add two files, planned as two separate units: docs/FAQ.md with two short frequently-asked questions and answers about this repo, and an .editorconfig at the repository root with root=true and basic UTF-8/LF settings.",
       "want_kind": "coding",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Explain how the Retry-After header works with 503 responses, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Describe HTTP ETag headers and conditional requests, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Compare HTTP HEAD and GET requests and typical uses of HEAD, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Compare HTTP 301 and 308 redirects and when to use each, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Summarize what DNS TTL means and how it affects record changes, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Explain what an idempotent HTTP method is with examples, in a markdown file.",
       "want_kind": "general",
-      "want_light": false
+      "want_light": false,
+      "source": "mission_store"
     },
     {
       "goal": "Summarize what HTTP status code 429 means and when a client should retry.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
     },
     {
       "goal": "Explain how the Retry-After header works with 503 responses.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
     },
     {
       "goal": "Describe HTTP ETag headers and conditional requests.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
     },
     {
       "goal": "Explain CORS preflight requests and when browsers send them.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
     },
     {
       "goal": "Compare HTTP 301 and 308 redirects and when to use each.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
     },
     {
       "goal": "Describe the robots.txt format and how crawlers use it.",
       "want_kind": "general",
-      "want_light": true
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Explain HTTP chunked transfer encoding and when it applies, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Summarize what HTTP status code 429 means and when a client should retry, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Explain CORS preflight requests and when browsers send them, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Add a short section to README.md named Running tests that explains how to run the test suite. Keep all tests passing.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Write AUDIT.md in the repository listing every package dependency with a known vulnerability and the current test result. Do not change any dependency.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Write a 300 word comparison of three sorting algorithms with a table.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Reply with one short sentence confirming the scheduled automation ran.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Save a note named run_count with a short value, then report the mission as done.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Mark the mission done and return exactly this text as the final output: note recorded.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "mission_store"
+    },
+    {
+      "goal": "Fix the failing unit test in the date parsing package and keep the rest of the suite green.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Add a CI workflow file that runs the linter and the tests on every pull request.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Write a shell script that backs up the database to a dated file and deletes backups older than 14 days.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Refactor the HTTP handler package so request validation lives in one helper, without changing behavior.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Add a Dockerfile and a compose file so the service starts with one command.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Upgrade the logging library to its latest minor version and fix any compile errors.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Add input validation and a table-driven test for the email field of the signup handler.",
+      "want_kind": "coding",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Research the five most common causes of slow PostgreSQL queries and write a report with examples and fixes as a PDF.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Write a 4000 word beginner book chapter that explains how version control works, with worked examples.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Gather pricing and feature data for four project management tools and produce a comparison spreadsheet and a summary report.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Plan a two-week onboarding program for a new backend engineer, with daily goals and a reading list, as a markdown document.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Analyze the attached CSV of monthly sales and produce a report with charts and three recommendations.",
+      "want_kind": "general",
+      "want_light": false,
+      "source": "synthetic"
+    },
+    {
+      "goal": "What is the difference between a process and a thread?",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Summarize the key points of the twelve-factor app method in a few sentences.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Look up what HTTP status code 418 means.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Give me a one-paragraph explanation of what a vector database is.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "List three common causes of a memory leak in a long-running service.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Translate this sentence into German: the build finished without errors.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
+    },
+    {
+      "goal": "Explain the difference between TCP and UDP in two short paragraphs.",
+      "want_kind": "general",
+      "want_light": true,
+      "source": "synthetic"
     }
   ],
   "agents": [
@@ -116,7 +303,8 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "coding"
+      "want_agent": "coding",
+      "source": "synthetic"
     },
     {
       "message": "Can you review this pull request diff for SQL injection vulnerabilities and race conditions?",
@@ -137,7 +325,8 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "coding"
+      "want_agent": "coding",
+      "source": "synthetic"
     },
     {
       "message": "Please write a polite email to decline an interview offer while keeping the connection open for the future",
@@ -158,7 +347,8 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "writer"
+      "want_agent": "writer",
+      "source": "synthetic"
     },
     {
       "message": "Draft a comprehensive technical blog post explaining Raft consensus in simple terms for junior engineers",
@@ -179,7 +369,8 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "writer"
+      "want_agent": "writer",
+      "source": "synthetic"
     },
     {
       "message": "What is the capital of Australia and what are its top historical landmarks?",
@@ -200,7 +391,8 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "general"
+      "want_agent": "general",
+      "source": "synthetic"
     },
     {
       "message": "Can you calculate the time difference between Tokyo and New York and convert 100 EUR to USD?",
@@ -221,7 +413,730 @@
           "description": "Everyday questions and tasks on a strong all-round chain"
         }
       ],
-      "want_agent": "general"
+      "want_agent": "general",
+      "source": "synthetic"
+    },
+    {
+      "message": "Why does my Python script raise KeyError when the config file is missing a field?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "coding",
+      "source": "synthetic"
+    },
+    {
+      "message": "Read through the repository I am working on and explain how it is structured.",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "coding",
+      "source": "session_shape"
+    },
+    {
+      "message": "Proofread this paragraph for a product announcement and make it sound less stiff.",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "writer",
+      "source": "synthetic"
+    },
+    {
+      "message": "Write release notes in plain language from this list of merged changes.",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "writer",
+      "source": "synthetic"
+    },
+    {
+      "message": "How many grams of flour are in one cup?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "general",
+      "source": "synthetic"
+    },
+    {
+      "message": "Suggest a plan for a rainy weekend in a mid-sized city.",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "general",
+      "source": "synthetic"
+    },
+    {
+      "message": "Find recent studies on how remote work affects productivity and summarize them with citations.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+      "source": "synthetic"
+    },
+    {
+      "message": "Collect three independent sources on the history of the transistor and give me a cited overview.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+      "source": "synthetic"
+    },
+    {
+      "message": "The web container keeps restarting since the last deploy; help me find out why.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Set up log rotation on the server so the disk stops filling up.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Our TLS certificate expires next week; walk me through renewing it on the load balancer.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Draft a reply to the latest email from the landlord asking to move the inspection to Friday.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+      "source": "synthetic"
+    },
+    {
+      "message": "Find a 30-minute slot next week when both of my calendars are free.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+      "source": "synthetic"
+    },
+    {
+      "message": "Archive every newsletter in my inbox from the last month.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+      "source": "synthetic"
+    },
+    {
+      "message": "What is a good name for a grey kitten?",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+      "source": "synthetic"
+    },
+    {
+      "message": "Convert 72 degrees Fahrenheit to Celsius.",
+      "candidates": [
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000002",
+          "name": "research",
+          "description": "Finds sources on the web and writes cited summaries."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000003",
+          "name": "ops",
+          "description": "Runs and debugs infrastructure: servers, containers, deploys and monitoring."
+        },
+        {
+          "id": "0b6f2c1e-5a0d-4c1b-9b1e-000000000004",
+          "name": "inbox",
+          "description": "Triages email and calendar: drafts replies and finds meeting times."
+        }
+      ],
+      "want_agent": "0b6f2c1e-5a0d-4c1b-9b1e-000000000001",
+      "source": "synthetic"
+    },
+    {
+      "message": "Here is a CSV of monthly expenses; chart spending by category and point out the biggest change.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Compute the median and 90th percentile response time from this table of request timings.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Build a pivot table of sales by region and quarter from the attached spreadsheet.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+      "source": "synthetic"
+    },
+    {
+      "message": "Add pagination to the list endpoint in our Go service.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+      "source": "synthetic"
+    },
+    {
+      "message": "My Docker build fails with a missing module error; here is the Dockerfile.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+      "source": "synthetic"
+    },
+    {
+      "message": "Write a SQL query that returns the ten customers with the highest total order value.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+      "source": "synthetic"
+    },
+    {
+      "message": "Write a cover letter for a junior data analyst position.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+      "source": "synthetic"
+    },
+    {
+      "message": "Turn these bullet points into a friendly newsletter intro for our users.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+      "source": "synthetic"
+    },
+    {
+      "message": "Explain how interest on a savings account is taxed, in simple terms.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+      "source": "synthetic"
+    },
+    {
+      "message": "Recommend three podcasts about the history of science.",
+      "candidates": [
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000002",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000003",
+          "name": "data",
+          "description": "Analyzes spreadsheets and CSV data, builds charts and summary tables."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000004",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation."
+        },
+        {
+          "id": "4e2a9d7c-1f3b-4a6e-8c2d-000000000005",
+          "name": "scratch",
+          "description": ""
+        }
+      ],
+      "want_agent": "4e2a9d7c-1f3b-4a6e-8c2d-000000000001",
+      "source": "synthetic"
     }
   ],
   "kb_filing": [
@@ -260,7 +1175,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-devops"
+      "want_choice": "col-devops",
+      "source": "synthetic"
     },
     {
       "title": "Choosing Database Indexes for Read Heavy Workloads",
@@ -297,7 +1213,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-db"
+      "want_choice": "col-db",
+      "source": "synthetic"
     },
     {
       "title": "Zero Downtime Istio Migration Risks",
@@ -334,7 +1251,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-devops"
+      "want_choice": "col-devops",
+      "source": "synthetic"
     },
     {
       "title": "When a Service Mesh Pays Off on a Small Kubernetes Cluster",
@@ -371,7 +1289,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-devops"
+      "want_choice": "col-devops",
+      "source": "synthetic"
     },
     {
       "title": "Operator Profile",
@@ -408,7 +1327,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-team"
+      "want_choice": "col-team",
+      "source": "synthetic"
     },
     {
       "title": "Chunking Strategy for Retrieval Augmented Generation",
@@ -445,7 +1365,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-ai"
+      "want_choice": "col-ai",
+      "source": "synthetic"
     },
     {
       "title": "About Timothy",
@@ -482,7 +1403,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-core"
+      "want_choice": "col-core",
+      "source": "kb_store"
     },
     {
       "title": "Skills",
@@ -519,7 +1441,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "col-ai"
+      "want_choice": "col-ai",
+      "source": "kb_store"
     },
     {
       "title": "Grandmother's Authentic Strawberry Jam Recipe",
@@ -556,7 +1479,8 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "NEW"
+      "want_choice": "NEW",
+      "source": "synthetic"
     },
     {
       "title": "Feline Vaccination and Health Check Schedule",
@@ -593,7 +1517,844 @@
           "doc_count": 5
         }
       ],
-      "want_choice": "NEW"
+      "want_choice": "NEW",
+      "source": "synthetic"
+    },
+    {
+      "title": "Channels",
+      "text": "Channel kinds this build runs.\n\n- email\n- slack\n- telegram\n\nA channel connects an outside conversation to an agent. Each channel is set up on the Channels settings page.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Connectors",
+      "text": "Connector kinds this build can create.\n\n- aws\n- bitbucket\n- caldav\n- gcp\n- github\n- gitlab\n- google\n- imap\n- mcp\n- microsoft\n\nA connector gives agents read and write access to an outside account.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Destinations",
+      "text": "Destinations are places a finished mission can deliver its result to, such as an email address or a chat channel. They are managed on the Destinations settings page and picked per mission.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Feature Switches",
+      "text": "Feature switches and their defaults. A change applies immediately, with no restart.\n\n- automations: on by default\n- channels: on by default\n- compaction: on by default\n- image captioning for knowledge: off by default\n- memory extraction: on by default",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Web UI Paths",
+      "text": "Paths the web UI serves.\n\n- /: Home\n- /agents: Agents\n- /analytics: Analytics\n- /automations: Automations\n- /chat: Chat\n- /knowledge: Knowledge\n- /missions: Missions\n- /settings: Settings",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Settings Pages",
+      "text": "Settings pages in the web UI.\n\n- Channels\n- Connectors\n- Credentials\n- Destinations\n- Features\n- Memory\n- Providers\n- Routing\n- Secrets",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "Tools",
+      "text": "Built-in tools an agent can call. Read tools such as search_kb, search_memory and read_file run without approval. Tools that change state, such as write_file or shell commands in a mission sandbox, ask for permission unless the agent's allowlist covers them.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "kb_store"
+    },
+    {
+      "title": "How to Configure a Decide Route",
+      "text": "A decide route answers fixed-choice questions such as picking an agent or filing a document. Open the Routing settings page, create a route with the decide capability, add a decision model or a chat model as its first entry, and bind the route to the decide role.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-docs",
+      "source": "synthetic"
+    },
+    {
+      "title": "Weeknight Lentil Curry",
+      "text": "Ingredients: red lentils, one onion, garlic, ginger, curry paste, a can of coconut milk and spinach.\n\nFry the onion, garlic and ginger, stir in the paste, add the lentils with water and simmer for twenty minutes. Finish with coconut milk and spinach. Serves four.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-cooking",
+      "source": "synthetic"
+    },
+    {
+      "title": "Sourdough Starter Feeding Schedule",
+      "text": "Feed the starter once a day at room temperature: discard all but 50 g, then add 50 g flour and 50 g water. Move it to the fridge between bakes and feed it weekly. It is ready to bake with when it doubles within six hours of a feed.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-cooking",
+      "source": "synthetic"
+    },
+    {
+      "title": "Freezer Meal Prep for a Busy Week",
+      "text": "Cook a large batch of chili, a tray of baked pasta and a pot of vegetable soup on Sunday. Cool them fast, portion into labelled containers and freeze. Each portion keeps for three months and reheats in under ten minutes.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-cooking",
+      "source": "synthetic"
+    },
+    {
+      "title": "Kitten First Vet Visit Checklist",
+      "text": "Bring the adoption papers and any previous vaccination record. Ask about the vaccine schedule, deworming, flea treatment and the right age for neutering. Weigh the kitten and note the food brand it eats now.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-pets",
+      "source": "synthetic"
+    },
+    {
+      "title": "Dog Leash Training Notes",
+      "text": "Short sessions of five minutes work best. Reward the dog every time the leash is loose, and stop walking as soon as it pulls. Practice in a quiet street before busy places.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-pets",
+      "source": "synthetic"
+    },
+    {
+      "title": "Monthly Household Budget Template",
+      "text": "Columns: category, planned amount, actual amount, difference. Fixed costs first: rent, utilities, insurance, transport. Then variable costs: groceries, eating out, hobbies. Move what is left at month end into savings.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-money",
+      "source": "synthetic"
+    },
+    {
+      "title": "Comparing High-Yield Savings Accounts",
+      "text": "Compare the interest rate, whether it is variable, any minimum balance, withdrawal limits and deposit protection. A higher rate with a notice period suits money you will not need for a few months.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-money",
+      "source": "synthetic"
+    },
+    {
+      "title": "Car Insurance Renewal Comparison",
+      "text": "Three quotes for the yearly renewal, with the excess, courtesy car cover and no-claims protection for each. The current insurer's renewal price is higher than both new quotes for the same cover.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-money",
+      "source": "synthetic"
+    },
+    {
+      "title": "Packing List for a Week of Hiking",
+      "text": "Rain jacket, two pairs of hiking socks per day of walking, broken-in boots, a first aid kit, a headlamp, a water filter and a paper map of the area. Pack layers rather than one heavy coat.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-travel",
+      "source": "synthetic"
+    },
+    {
+      "title": "Three Days in Lisbon Itinerary",
+      "text": "Day one: the old town and the castle. Day two: the riverside district and the tower. Day three: a train to the hill town nearby for the palaces. Buy a transit card on arrival.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "c-travel",
+      "source": "synthetic"
+    },
+    {
+      "title": "Home Office Ergonomics",
+      "text": "Set the top of the screen at eye height and an arm's length away. Keep elbows at about ninety degrees with the keyboard close. Stand up and move every half hour.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "NEW",
+      "source": "synthetic"
+    },
+    {
+      "title": "Beginner Guitar Chord Practice Plan",
+      "text": "Learn the open chords G, C, D and E minor first. Practice switching between two chords for one minute at a time, then play a simple four-chord song slowly with a metronome.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "NEW",
+      "source": "synthetic"
+    },
+    {
+      "title": "Houseplant Watering Guide",
+      "text": "Water most leafy houseplants when the top two centimeters of soil are dry. Succulents need water far less often. Yellow lower leaves usually mean too much water, crispy edges too little.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "NEW",
+      "source": "synthetic"
+    },
+    {
+      "title": "Training Plan for a First 10K Run",
+      "text": "Eight weeks, three runs a week: one easy run, one interval session and one long run that grows by one kilometer each week. Rest days matter as much as the runs.",
+      "collections": [
+        {
+          "id": "c-docs",
+          "name": "Product Docs",
+          "description": "Timothy's own documentation for this version",
+          "doc_count": 9
+        },
+        {
+          "id": "c-cooking",
+          "name": "Cooking",
+          "description": "Recipes, meal plans and kitchen techniques",
+          "doc_count": 14
+        },
+        {
+          "id": "c-pets",
+          "name": "Pet Care",
+          "description": "Feeding, health and training notes for household pets",
+          "doc_count": 6
+        },
+        {
+          "id": "c-money",
+          "name": "Personal Finance",
+          "description": "Budgets, savings, taxes and insurance paperwork",
+          "doc_count": 11
+        },
+        {
+          "id": "c-travel",
+          "name": "Travel",
+          "description": "Trip plans, packing lists and destination notes",
+          "doc_count": 8
+        }
+      ],
+      "want_choice": "NEW",
+      "source": "synthetic"
     }
   ]
 }
