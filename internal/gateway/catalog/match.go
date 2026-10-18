@@ -17,7 +17,7 @@ func CandidateProviders(driver, baseURL string) []string {
 		return []string{"anthropic"}
 	case "bedrock":
 		return []string{"bedrock", "bedrock_converse"}
-	case "openaicompat", "openai-responses":
+	case "openaicompat":
 		return candidatesForHost(baseURL)
 	case "jev":
 		return []string{"typesafe", "jev"}

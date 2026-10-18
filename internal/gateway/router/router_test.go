@@ -497,6 +497,13 @@ func TestResolveDetailAllowsModelOnChatDriver(t *testing.T) {
 	if snap.ResponsesMode("openrouter", "gpt-5.3-codex") {
 		t.Fatalf("snap.ResponsesMode = true, want false for openrouter")
 	}
+
+	// 4. A leftover row on the removed openai-responses driver never
+	// reaches the Responses path.
+	if snap.responsesOnly(ProviderRow{Name: "legacy", Kind: "api", Driver: "openai-responses",
+		BaseURL: "https://api.openai.com/v1"}, "gpt-5.3-codex") {
+		t.Fatalf("responsesOnly = true, want false for the removed openai-responses driver")
+	}
 }
 
 // TestResolveVisionRejectsModelDeclaringOnlyChat confirms a catalog

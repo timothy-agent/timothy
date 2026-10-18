@@ -42,7 +42,7 @@ type pgxQuerier interface {
 // against cliDrivers instead: they're mission-only executor providers
 // the gateway never builds a chat driver for at all.
 var drivers = map[string]bool{
-	"anthropic": true, "openaicompat": true, "openai-responses": true, "bedrock": true,
+	"anthropic": true, "openaicompat": true, "bedrock": true,
 	"laya": true, "jev": true,
 }
 
@@ -1340,7 +1340,7 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 	timeout := probeTimeout(p.Options)
 	responsesMode := snap.ResponsesMode(p.Name, model)
 	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), timeout, responsesMode)
-	if res.OK && (p.Driver == "openaicompat" || p.Driver == "openai-responses") && p.BaseURL != "" {
+	if res.OK && p.Driver == "openaicompat" && p.BaseURL != "" {
 		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, timeout)
 		if res.ResponsesOK != nil {
 			if err := a.setOpenAIResponses(ctx, id, *res.ResponsesOK); err != nil {
@@ -1428,7 +1428,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 	probeTO := probeTimeout(p.Options)
 	responsesMode := a.isResponsesMode(ctx, p, model)
 	res := a.probe(ctx, drv, p.Name, model, nil, probeTO, responsesMode)
-	if res.OK && (p.Driver == "openaicompat" || p.Driver == "openai-responses") && p.BaseURL != "" {
+	if res.OK && p.Driver == "openaicompat" && p.BaseURL != "" {
 		// Report-only: Validate probes an unsaved config, so there is
 		// nothing to persist the result onto.
 		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, probeTO)
@@ -1481,9 +1481,6 @@ func probeTimeout(opts map[string]string) time.Duration {
 }
 
 func (a *Admin) isResponsesMode(ctx context.Context, p Provider, model string) bool {
-	if p.Driver == "openai-responses" {
-		return true
-	}
 	if p.Driver != "openaicompat" || !catalog.IsOpenAIHost(p.BaseURL) {
 		return false
 	}

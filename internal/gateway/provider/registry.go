@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Name          string
 	Kind          Kind
-	Driver        string // "anthropic" | "openaicompat" | "openai-responses" | "bedrock" | "laya" | "jev"
+	Driver        string // "anthropic" | "openaicompat" | "bedrock" | "laya" | "jev"
 	BaseURL       string
 	CredentialRef string
 	Headers       map[string]string
@@ -75,18 +75,6 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				return nil, fmt.Errorf("registry: provider %q: openaicompat requires base_url", c.Name)
 			}
 			p = NewOpenAICompat(OpenAICompatConfig{
-				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
-				Headers: c.Headers, Timeout: c.Timeout,
-				ReasoningEffort: c.ReasoningEffort,
-			})
-		case "openai-responses":
-			// D-067: the Responses API driver for reasoning-class OpenAI
-			// models that return empty streams over chat/completions on
-			// tool-mandatory turns.
-			if c.BaseURL == "" {
-				return nil, fmt.Errorf("registry: provider %q: openai-responses requires base_url", c.Name)
-			}
-			p = NewOpenAIResponses(OpenAIResponsesConfig{
 				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
 				Headers: c.Headers, Timeout: c.Timeout,
 				ReasoningEffort: c.ReasoningEffort,
