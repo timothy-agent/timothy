@@ -19,7 +19,7 @@ const (
 )
 
 // Price sources (D-173), in the order router.Snapshot.Prices resolves
-// them: prices_by_model, the catalog, the provider's own listing.
+// them: prices_by_model, the provider's own listing, the catalog.
 const (
 	priceSourceOperator = "operator"
 	priceSourceCatalog  = "catalog"

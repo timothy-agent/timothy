@@ -62,7 +62,7 @@ func (s *Store) Run(ctx context.Context) {
 			continue
 		}
 	}
-	s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
+	go s.runLivePrices(ctx)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -75,7 +75,21 @@ func (s *Store) Run(ctx context.Context) {
 				// Keep serving the last good snapshot.
 				s.log.Warn("config reload failed", "error", err)
 			}
-			s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
+		}
+	}
+}
+
+// runLivePrices relists on its own ticker so a slow listing never
+// delays a config reload. It returns when ctx ends.
+func (s *Store) runLivePrices(ctx context.Context) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
