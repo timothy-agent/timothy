@@ -551,9 +551,6 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 // Responses API (LiteLLM mode "responses", the gpt-5.x-codex family),
 // used by chat-only mission harnesses (issue #718).
 func (s *Snapshot) responsesOnly(row ProviderRow, model string) bool {
-	if row.Driver == "openai-responses" {
-		return true
-	}
 	if row.Driver != "openaicompat" || !catalog.IsOpenAIHost(row.BaseURL) {
 		return false
 	}

@@ -26,6 +26,7 @@ func TestCandidateProviders(t *testing.T) {
 		{"unrecognized host: no restriction", "openaicompat", "https://example.com/v1", nil},
 		{"jev driver", "jev", "", []string{"typesafe", "jev"}},
 		{"unknown driver", "weird", "", nil},
+		{"legacy openai-responses driver", "openai-responses", "https://api.openai.com/v1", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

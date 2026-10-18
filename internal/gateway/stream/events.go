@@ -125,8 +125,8 @@ type Meta struct {
 	// OpenAI resp_.../chatcmpl-..., Anthropic msg_...), for reconciling a
 	// ledger row against the provider's own usage export.
 	ProviderRequestID string `json:"provider_request_id,omitempty"`
-	// ProviderState is opaque driver continuation state (D-067) — e.g.
-	// the openai-responses driver's previous_response_id — echoed back
+	// ProviderState is opaque driver continuation state (D-067), e.g.
+	// the Responses API's previous_response_id, echoed back
 	// by the caller on the next CompletionRequest.ProviderState so the
 	// driver can chain reasoning items across turn steps.
 	ProviderState json.RawMessage `json:"provider_state,omitempty"`
