@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
@@ -82,7 +84,7 @@ func TestCatalogSearchThroughAdmin(t *testing.T) {
 }
 
 // TestCatalogModelsWireShapeStripsOwnPrefix covers the id field
-// CatalogSearch/CatalogModelsForProvider add to the wire shape: the
+// CatalogSearch adds to the wire shape: the
 // entry's own litellm_provider prefix stripped from model_key (the id
 // a provider's API actually accepts), with model_key kept alongside
 // unchanged for reference. A bare key (openai/gpt-4o has no zai/xai
@@ -180,6 +182,60 @@ func TestResolvePricedModel(t *testing.T) {
 				}
 			} else if got.Price != nil {
 				t.Fatalf("Price = %+v, want nil", got.Price)
+			}
+		})
+	}
+}
+
+// TestCliproxyVendorModels covers AvailableModels' D-171 filter: a
+// cliproxy row lists only its signalled vendor's ids from the proxy's
+// mixed list; ambiguous and non-cliproxy rows get the list unchanged.
+func TestCliproxyVendorModels(t *testing.T) {
+	live := []provider.AvailableModel{
+		{ID: "claude-sonnet-4-5"}, {ID: "claude-opus-4-1"},
+		{ID: "gpt-5"}, {ID: "o3"}, {ID: "codex-auto-review"}, {ID: "gpt-image-1"},
+	}
+	all := []string{"claude-sonnet-4-5", "claude-opus-4-1", "gpt-5", "o3", "codex-auto-review", "gpt-image-1"}
+
+	cases := []struct {
+		name string
+		p    Provider
+		want []string
+	}{
+		{
+			name: "claude subscription",
+			p:    Provider{Name: "Claude Subscription", BaseURL: "http://cliproxy:8317/v1", DefaultModel: "claude-sonnet-4-5"},
+			want: []string{"claude-sonnet-4-5", "claude-opus-4-1"},
+		},
+		{
+			name: "chatgpt subscription",
+			p:    Provider{Name: "ChatGPT Subscription", BaseURL: "http://cliproxy:8317/v1", DefaultModel: "gpt-5"},
+			want: []string{"gpt-5", "o3", "codex-auto-review", "gpt-image-1"},
+		},
+		{
+			name: "default model alone signals vendor",
+			p:    Provider{Name: "Work", BaseURL: "http://127.0.0.1:8317/v1", DefaultModel: "o3"},
+			want: []string{"gpt-5", "o3", "codex-auto-review", "gpt-image-1"},
+		},
+		{
+			name: "ambiguous row keeps all",
+			p:    Provider{Name: "Subscriptions", BaseURL: "http://cliproxy:8317/v1"},
+			want: all,
+		},
+		{
+			name: "non-cliproxy row keeps all",
+			p:    Provider{Name: "Claude Subscription", BaseURL: "https://mars-ai.example.com/v1"},
+			want: all,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, m := range cliproxyVendorModels(tc.p, live) {
+				got = append(got, m.ID)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ids = %v, want %v", got, tc.want)
 			}
 		})
 	}

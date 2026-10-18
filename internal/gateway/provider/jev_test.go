@@ -2,7 +2,6 @@ package provider
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +12,7 @@ import (
 // records the last request payload it received.
 type jevStub struct {
 	srv    *httptest.Server
-	got    jevRequest
+	got    systemoneRequest
 	auth   string
 	status int
 	answer string
@@ -45,7 +44,7 @@ func newJevStub(t *testing.T, answer string) *jevStub {
 
 func TestJevCapabilitiesAndStream(t *testing.T) {
 	t.Parallel()
-	j := NewJev(JevConfig{Name: "jev"})
+	j := NewJev(SystemOneConfig{Name: "jev"})
 	caps := j.Capabilities()
 	if len(caps) != 1 || caps[0] != CapDecide {
 		t.Fatalf("capabilities = %v, want decide only", caps)
@@ -58,12 +57,12 @@ func TestJevCapabilitiesAndStream(t *testing.T) {
 func TestJevDecideChoice(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL, APIKey: "jv_live_testkey"}) // #nosec G101
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL, APIKey: "jv_live_testkey"}) // #nosec G101
 
 	res, usage, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
-		Options:  []string{"coding", "research", "general"},
+		Options:  optIDs("coding", "research", "general"),
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -102,13 +101,13 @@ func TestJevDecideChoice(t *testing.T) {
 func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 
 	res, _, err := j.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Classify this goal.",
 		State:    "Write a go compiler",
-		Options:  []string{"coding: writes code", "general: documents"},
+		Options:  []DecideOption{{ID: "coding", Description: "writes code"}, {ID: "general", Description: "documents"}},
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -125,19 +124,19 @@ func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	}
 	crit, ok := q.Criteria.(map[string]any)
 	if !ok || crit["coding"] != "writes code" || crit["general"] != "documents" {
-		t.Fatalf("crit = %+v, want split id: description", crit)
+		t.Fatalf("crit = %+v, want each id mapped to its description", crit)
 	}
 }
 
 func TestJevDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"hallucinated","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 
 	_, _, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
-		Options:  []string{"coding", "research", "general"},
+		Options:  optIDs("coding", "research", "general"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("err = %v, want 'not an allowed option'", err)
@@ -157,8 +156,8 @@ func TestJevDecideYesNo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := newJevStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
-			j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-			res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
+			j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
+			res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: optIDs("yes", "no")})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -173,74 +172,6 @@ func TestJevDecideYesNo(t *testing.T) {
 	}
 }
 
-func TestJevDecideScore(t *testing.T) {
-	t.Parallel()
-
-	t.Run("default criteria 4 levels", func(t *testing.T) {
-		t.Parallel()
-		stub := newJevStub(t, `{"type":"score","score":1.5,"probabilities":{"0":0.1,"1":0.3,"2":0.4,"3":0.2}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		res, usage, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "How relevant is this document?"})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.5) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.5", res.Score)
-		}
-		if res.Choice != "" {
-			t.Fatalf("res.Choice = %q, want empty", res.Choice)
-		}
-		if usage == nil || usage.InputTokens != 83 {
-			t.Fatalf("usage = %+v", usage)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 4 {
-			t.Fatalf("criteria = %v, want 4 levels", q.Criteria)
-		}
-	})
-
-	t.Run("custom 3 levels 0 to 2 scale", func(t *testing.T) {
-		t.Parallel()
-		stub := newJevStub(t, `{"type":"score","score":1.84,"probabilities":{"0":0.05,"1":0.11,"2":0.84}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		res, _, err := j.Decide(t.Context(), "", DecideRequest{
-			Kind:     DecideScore,
-			Question: "How urgent is this incident?",
-			Options:  []string{"not urgent", "soon", "blocking"},
-		})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.92) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.92", res.Score)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 3 {
-			t.Fatalf("criteria = %v, want 3 levels", q.Criteria)
-		}
-	})
-}
-
-func TestJevDecideScoreOutsideRangeIsAnError(t *testing.T) {
-	t.Parallel()
-	for _, badScore := range []string{"-0.1", "3.5"} {
-		stub := newJevStub(t, `{"type":"score","score":`+badScore+`}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		_, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
-		if err == nil || !strings.Contains(err.Error(), "outside [0, 3]") {
-			t.Fatalf("score %s: err = %v, want 'outside [0, 3]'", badScore, err)
-		}
-	}
-}
-
 // TestJevDecideHTTPErrorWithoutRequestBody verifies that on 4xx/5xx from Jev,
 // the driver returns an error containing the status code without echoing the
 // input request question/state.
@@ -250,7 +181,7 @@ func TestJevDecideHTTPErrorWithoutRequestBody(t *testing.T) {
 	stub := newJevStub(t, `{"error":"invalid_api_key","message":"unauthorized"}`)
 	stub.status = http.StatusUnauthorized
 
-	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 	_, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: sensitiveQuestion})
 	if err == nil {
 		t.Fatal("Decide must error on 401")
@@ -273,8 +204,8 @@ func TestJevURLVariations(t *testing.T) {
 		stub.srv.URL + "/v1",
 		stub.srv.URL + "/v1/systemone",
 	} {
-		j := NewJev(JevConfig{Name: "jev", BaseURL: u})
-		res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"yes", "no"}})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: u})
+		res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: optIDs("yes", "no")})
 		if err != nil {
 			t.Fatalf("url %s: Decide: %v", u, err)
 		}
@@ -299,7 +230,7 @@ func TestJevListModels(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		j := NewJev(JevConfig{Name: "jev", BaseURL: srv.URL})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
 		models, err := j.ListModels(t.Context())
 		if err != nil {
 			t.Fatalf("ListModels: %v", err)
@@ -312,15 +243,43 @@ func TestJevListModels(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback when endpoint unavailable", func(t *testing.T) {
+	t.Run("error when endpoint unavailable", func(t *testing.T) {
 		t.Parallel()
-		j := NewJev(JevConfig{Name: "jev", BaseURL: "http://127.0.0.1:1"})
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: "http://127.0.0.1:1"})
+		models, err := j.ListModels(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "jev: list models") {
+			t.Fatalf("ListModels = %+v, %v; want a jev list models error", models, err)
+		}
+		if models != nil {
+			t.Fatalf("models = %+v, want none on error", models)
+		}
+	})
+
+	t.Run("error on HTTP failure", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"invalid_api_key"}`, http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
+		if models, err := j.ListModels(t.Context()); err == nil || !strings.Contains(err.Error(), "401") {
+			t.Fatalf("ListModels = %+v, %v; want a 401 error", models, err)
+		}
+	})
+
+	t.Run("empty list when the endpoint lists nothing", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"models":[]}`))
+		}))
+		defer srv.Close()
+		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: srv.URL})
 		models, err := j.ListModels(t.Context())
 		if err != nil {
-			t.Fatalf("ListModels fallback: %v", err)
+			t.Fatalf("ListModels: %v", err)
 		}
-		if len(models) != 3 || models[0].ID != "jev-latest" || models[1].ID != "jev-preview" || models[2].ID != "jev-1.13.0" {
-			t.Fatalf("models = %+v, want default static list", models)
+		if len(models) != 0 {
+			t.Fatalf("models = %+v, want empty", models)
 		}
 	})
 }

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1931,12 +1932,17 @@ func TestCollapseRepeatedTail(t *testing.T) {
 }
 
 // The "auto" sentinel resolves through SetAutoDispatch's candidates
-// and classify BEFORE the normal agent lookup: the resolved name (not
+// and decide BEFORE the normal agent lookup: the resolved name (not
 // "auto" itself) is what reaches the resolver, the gateway request,
 // and persistence.
 func TestChatAutoDispatchesAgent(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGW{events: okEvents("done")}
+	gw := &fakeGW{
+		events: okEvents("done"),
+		decideFn: func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "researcher"}, nil
+		},
+	}
 	log := newFakeLog()
 	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
 		switch id {
@@ -1955,7 +1961,7 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 	}
 	svc.SetAutoDispatch(
 		func(context.Context) []agents.Agent { return candidates },
-		func(context.Context, string) (string, error) { return "2", nil }, // picks researcher
+		func(context.Context, string) (string, error) { return "1", nil }, // never consulted with a gateway
 	)
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
@@ -3566,44 +3572,75 @@ func TestClassifyOverGatewaySkipsStreamWhenRoleUnbound(t *testing.T) {
 	}
 }
 
-// Dispatch (agents package) already falls back to the default agent on
-// any classify error, so an unbound summarize role surfaces here as a
-// dispatch fallback, never a broken turn: this is the same contract
-// TestChatAutoWithoutDispatchWiredFallsBackToDefault exercises for a
-// nil classify, extended to a wired-but-erroring one.
-func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
+// A failed or unmatched decide falls back to the default agent with no
+// classify side-call: the gateway's decide chain already tried every
+// tier, so one dispatch books one decide chain and nothing else.
+func TestChatAutoDispatchFallsBackWhenDecideFails(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGW{events: okEvents("done")}
-	log := newFakeLog()
-	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
-		switch id {
-		case "", "general-id":
-			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
-		case "researcher-id":
-			return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
-		default:
-			return agents.Agent{}, false
-		}
+	cases := []struct {
+		name     string
+		decideFn func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error)
+	}{
+		{"decide error", func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{}, errors.New("gwclient: gateway http 502: chain_exhausted")
+		}},
+		{"decide no match", func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "unknown-agent"}, nil
+		}},
 	}
-	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
-	candidates := []agents.Agent{
-		{ID: "general-id", Name: "general", Description: "everyday tasks"},
-		{ID: "researcher-id", Name: "researcher", Description: "consults sources"},
-	}
-	svc.SetAutoDispatch(
-		func(context.Context) []agents.Agent { return candidates },
-		func(context.Context, string) (string, error) { return "", errors.New("summarize role unbound") },
-	)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gw := &fakeGW{events: okEvents("done"), decideFn: tc.decideFn}
+			log := newFakeLog()
+			resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+				switch id {
+				case "", "general-id":
+					return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
+				case "researcher-id":
+					return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
+				default:
+					return agents.Agent{}, false
+				}
+			}
+			svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
+			candidates := []agents.Agent{
+				{ID: "general-id", Name: "general", Description: "everyday tasks"},
+				{ID: "researcher-id", Name: "researcher", Description: "consults sources"},
+			}
+			var classifyCalls atomic.Int32
+			svc.SetAutoDispatch(
+				func(context.Context) []agents.Agent { return candidates },
+				func(context.Context, string) (string, error) {
+					classifyCalls.Add(1)
+					return "2", nil
+				},
+			)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
-	if err != nil {
-		t.Fatalf("Chat: %v", err)
-	}
-	drain(t, ch)
+			_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			drain(t, ch)
 
-	sent := chatRequest(t, gw)
-	if sent.Agent != "general-id" || sent.Route != "default" {
-		t.Fatalf("agent/route = %s/%s, want general-id/default (dispatch fallback on classify error)", sent.Agent, sent.Route)
+			sent := chatRequest(t, gw)
+			if sent.Agent != "general-id" || sent.Route != "default" {
+				t.Fatalf("agent/route = %s/%s, want general-id/default (dispatch fallback on decide failure)", sent.Agent, sent.Route)
+			}
+			if n := classifyCalls.Load(); n != 0 {
+				t.Fatalf("classify called %d times, want 0", n)
+			}
+			gw.mu.Lock()
+			defer gw.mu.Unlock()
+			if len(gw.decideReqs) != 1 {
+				t.Fatalf("Decide called %d times, want 1", len(gw.decideReqs))
+			}
+			for _, r := range gw.requests {
+				if r.Purpose == "agent_dispatch" {
+					t.Fatal("agent_dispatch stream sent after decide, want none")
+				}
+			}
+		})
 	}
 }
 
@@ -3697,50 +3734,58 @@ func TestResolveToolAllowDeferredLoadTool(t *testing.T) {
 	}
 }
 
-// TestDecideOverGatewayResolvesDecideRole confirms DecideOverGateway
-// resolves the "decide" role and passes the request to Decide.
-func TestDecideOverGatewayResolvesDecideRole(t *testing.T) {
+// TestDecideOverGatewayLeavesRouteToGateway confirms DecideOverGateway
+// sends one request with an empty route whether or not the decide role
+// is bound, so the gateway resolves decide and its summarize fallback.
+func TestDecideOverGatewayLeavesRouteToGateway(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGW{
-		decideRole: "fast-decider",
-		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
-			return gwclient.DecideResponse{Choice: "option-b"}, nil
-		},
-	}
-	decide := DecideOverGateway(gw)
-	choice, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"})
-	if err != nil {
-		t.Fatalf("decide: %v", err)
-	}
-	if choice != "option-b" {
-		t.Fatalf("choice = %q, want option-b", choice)
-	}
-	gw.mu.Lock()
-	defer gw.mu.Unlock()
-	if len(gw.decideReqs) != 1 {
-		t.Fatalf("Decide called %d times, want 1", len(gw.decideReqs))
-	}
-	if gw.decideReqs[0].Route != "fast-decider" {
-		t.Fatalf("route = %q, want fast-decider", gw.decideReqs[0].Route)
-	}
-	if gw.decideReqs[0].Kind != "choice" || gw.decideReqs[0].State != "some-state" {
-		t.Fatalf("req = %+v, want kind=choice, state=some-state", gw.decideReqs[0])
+	for _, role := range []string{"fast-decider", ""} {
+		t.Run("role="+role, func(t *testing.T) {
+			t.Parallel()
+			gw := &fakeGW{
+				decideRole: role,
+				decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+					return gwclient.DecideResponse{Choice: "option-b"}, nil
+				},
+			}
+			decide := DecideOverGateway(gw)
+			choice, err := decide(t.Context(), "choice", "which one?", "some-state", []agents.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}})
+			if err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			if choice != "option-b" {
+				t.Fatalf("choice = %q, want option-b", choice)
+			}
+			gw.mu.Lock()
+			defer gw.mu.Unlock()
+			if len(gw.decideReqs) != 1 {
+				t.Fatalf("Decide called %d times, want 1", len(gw.decideReqs))
+			}
+			req := gw.decideReqs[0]
+			if req.Route != "" {
+				t.Fatalf("route = %q, want empty (gateway resolves the role)", req.Route)
+			}
+			if req.Kind != "choice" || req.State != "some-state" || req.Purpose != "decide" {
+				t.Fatalf("req = %+v, want kind=choice, state=some-state, purpose=decide", req)
+			}
+			wantOpts := []gwclient.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}}
+			if !slices.Equal(req.Options, wantOpts) {
+				t.Fatalf("options = %+v, want %+v", req.Options, wantOpts)
+			}
+		})
 	}
 }
 
-// TestDecideOverGatewayReturnsErrorWhenUnbound confirms DecideOverGateway
-// returns an error without making a request when the decide role is unbound.
-func TestDecideOverGatewayReturnsErrorWhenUnbound(t *testing.T) {
+// TestDecideOverGatewayReturnsGatewayError confirms a gateway failure
+// surfaces as an error, which dispatch turns into the fallback agent.
+func TestDecideOverGatewayReturnsGatewayError(t *testing.T) {
 	t.Parallel()
-	gw := &fakeGW{} // decideRole is empty -> unbound
+	gw := &fakeGW{decideFn: func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+		return gwclient.DecideResponse{}, errors.New("chain_exhausted")
+	}}
 	decide := DecideOverGateway(gw)
-	if _, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"}); err == nil {
-		t.Fatal("decide: want error when decide role is unbound")
-	}
-	gw.mu.Lock()
-	defer gw.mu.Unlock()
-	if len(gw.decideReqs) != 0 {
-		t.Fatalf("Decide called %d times, want 0", len(gw.decideReqs))
+	if _, err := decide(t.Context(), "choice", "which one?", "some-state", []agents.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}}); err == nil {
+		t.Fatal("decide: want error when the gateway fails")
 	}
 }
 
@@ -3844,8 +3889,9 @@ func TestChatAutoRouteIntentPicksDescribedRoute(t *testing.T) {
 	if firstDecide.Purpose != "route_intent" {
 		t.Fatalf("decide purpose = %q, want route_intent", firstDecide.Purpose)
 	}
-	if len(firstDecide.Options) != 2 || firstDecide.Options[0] != "default" || firstDecide.Options[1] != "coding: Software engineering and coding" {
-		t.Fatalf("decide options = %+v, want [default, coding: Software engineering and coding]", firstDecide.Options)
+	wantOpts := []gwclient.DecideOption{{ID: "default"}, {ID: "coding", Description: "Software engineering and coding"}}
+	if !slices.Equal(firstDecide.Options, wantOpts) {
+		t.Fatalf("decide options = %+v, want %+v", firstDecide.Options, wantOpts)
 	}
 }
 

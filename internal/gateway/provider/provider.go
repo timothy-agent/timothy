@@ -39,13 +39,11 @@ const (
 	CapDecide Capability = "decide"
 )
 
-// Decision kinds (D-163). A choice picks one of the given options, a
-// yesno is a choice over the fixed yes/no pair, and a score is one
-// number in [0, 1].
+// Decision kinds (D-163). A choice picks one of the given options and
+// a yesno is a choice over the fixed yes/no pair.
 const (
 	DecideChoice = "choice"
 	DecideYesNo  = "yesno"
-	DecideScore  = "score"
 )
 
 // DecideRequest is one fixed-choice question for a decision model.
@@ -54,16 +52,31 @@ type DecideRequest struct {
 	Question string
 	State    string
 	// Options is the closed answer set for a choice (already yes/no
-	// for a yesno); empty for a score.
-	Options []string
+	// for a yesno).
+	Options []DecideOption
 }
 
-// DecideResult is a typed answer: Choice for choice/yesno, Score for
-// score. Scores carries per-option probabilities when the model
-// reports them; the llm fallback never does.
+// DecideOption is one allowed answer: the reply names ID, Description
+// tells the model what ID stands for.
+type DecideOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+}
+
+// Label renders the option as "id: description" for a model to read,
+// or the bare id when there is no description. It is never parsed.
+func (o DecideOption) Label() string {
+	if o.Description == "" {
+		return o.ID
+	}
+	return o.ID + ": " + o.Description
+}
+
+// DecideResult is a typed answer. Scores carries per-option
+// probabilities when the model reports them; the llm fallback never
+// does.
 type DecideResult struct {
 	Choice string             `json:"choice,omitempty"`
-	Score  *float64           `json:"score,omitempty"`
 	Scores map[string]float64 `json:"scores,omitempty"`
 }
 

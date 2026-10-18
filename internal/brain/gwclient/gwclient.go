@@ -84,7 +84,7 @@ type Client struct {
 	mu         sync.Mutex
 	windows    map[string]int
 	windowsExp time.Time
-	roles         map[string]string
+	roles        map[string]string
 	rolesExp      time.Time
 	candidates    []RouteCandidate
 	candidatesExp time.Time
@@ -633,20 +633,25 @@ func (c *Client) CreateProvider(ctx context.Context, p AdminProvider) (string, e
 
 // DecideRequest mirrors the gateway's POST /v1/decide request contract (D-163).
 type DecideRequest struct {
-	Route     string   `json:"route,omitempty"`
-	Kind      string   `json:"kind"` // "choice" | "yesno" | "score"
-	Question  string   `json:"question"`
-	State     string   `json:"state,omitempty"`
-	Options   []string `json:"options,omitempty"`
-	Purpose   string   `json:"purpose,omitempty"`
-	SessionID string   `json:"session_id,omitempty"`
-	MissionID string   `json:"mission_id,omitempty"`
+	Route     string         `json:"route,omitempty"`
+	Kind      string         `json:"kind"` // "choice" | "yesno"
+	Question  string         `json:"question"`
+	State     string         `json:"state,omitempty"`
+	Options   []DecideOption `json:"options,omitempty"`
+	Purpose   string         `json:"purpose,omitempty"`
+	SessionID string         `json:"session_id,omitempty"`
+	MissionID string         `json:"mission_id,omitempty"`
+}
+
+// DecideOption is one allowed answer; the response's Choice is its ID.
+type DecideOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
 }
 
 // DecideResponse is the typed answer from POST /v1/decide.
 type DecideResponse struct {
 	Choice   string             `json:"choice,omitempty"`
-	Score    *float64           `json:"score,omitempty"`
 	Scores   map[string]float64 `json:"scores,omitempty"`
 	Provider string             `json:"provider"`
 	Model    string             `json:"model"`
@@ -660,7 +665,7 @@ func (r DecideResponse) YesNo() bool {
 	return r.Choice == "yes"
 }
 
-// Decide answers one fixed-choice, yes/no, or score question on a decide route.
+// Decide answers one fixed-choice or yes/no question on a decide route.
 // Route is optional: empty resolves the decide role on the gateway side.
 func (c *Client) Decide(ctx context.Context, req DecideRequest) (DecideResponse, error) {
 	body, err := json.Marshal(req)

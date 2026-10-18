@@ -42,16 +42,16 @@ func TestBuildRegistry(t *testing.T) {
 	if !ok || l.Name() != "laya" {
 		t.Fatal("laya missing")
 	}
-	if _, ok := l.(*Laya); !ok {
-		t.Fatalf("laya provider type = %T, want *Laya", l)
+	if layaProv, ok := l.(*SystemOne); !ok || layaProv.preset.driver != "laya" {
+		t.Fatalf("laya provider = %T, want *SystemOne with the laya preset", l)
 	}
 	j, ok := r.Get("jev")
 	if !ok || j.Name() != "jev" {
 		t.Fatal("jev missing")
 	}
-	jevProv, ok := j.(*Jev)
-	if !ok {
-		t.Fatalf("jev provider type = %T, want *Jev", j)
+	jevProv, ok := j.(*SystemOne)
+	if !ok || jevProv.preset.driver != "jev" {
+		t.Fatalf("jev provider = %T, want *SystemOne with the jev preset", j)
 	}
 	if jevProv.cfg.APIKey != "jv_live_test_key" {
 		t.Fatalf("jev APIKey = %q, want jv_live_test_key", jevProv.cfg.APIKey)

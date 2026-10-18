@@ -283,15 +283,6 @@ func TestSearchProvidersFiltersBySet(t *testing.T) {
 		t.Fatalf("models = %+v, want the anthropic and bedrock rows only", models)
 	}
 
-	// Empty/nil set means no restriction.
-	models, err = s.SearchProviders(ctx, "", nil, 0)
-	if err != nil {
-		t.Fatalf("SearchProviders: %v", err)
-	}
-	if len(models) != 3 {
-		t.Fatalf("models = %+v, want all 3 rows with no provider restriction", models)
-	}
-
 	// q still filters on top of the provider set.
 	models, err = s.SearchProviders(ctx, "opus", []string{"anthropic", "bedrock"}, 0)
 	if err != nil {
@@ -437,6 +428,68 @@ func TestSuggestMatchesThroughStore(t *testing.T) {
 	}
 	if sugs[1].Match != "" {
 		t.Fatalf("unmatched model got a match: %q", sugs[1].Match)
+	}
+}
+
+// TestEmptyCandidatesListNothing covers D-171: a row whose driver or
+// host maps to no catalog vendor gets no rows from SearchProviders and
+// no matches from Suggest, never the whole catalog.
+func TestEmptyCandidatesListNothing(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"azure/gpt-4o": {"litellm_provider": "azure", "mode": "chat", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002},
+			"bedrock/claude-3-opus": {"litellm_provider": "bedrock", "mode": "chat"},
+			"gpt-4o": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}
+		}`))
+	}))
+	defer srv.Close()
+	s.url = srv.URL
+	if _, err := s.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// The unmapped custom host the live listing leaked azure/bedrock for.
+	unmapped := CandidateProvidersForRow("api", "openaicompat", "https://mars-ai.example.com/v1", nil, "mars-ai", "gpt-4o")
+
+	cases := []struct {
+		name       string
+		candidates []string
+		q          string
+		limit      int
+	}{
+		{name: "unmapped host", candidates: unmapped},
+		{name: "nil", candidates: nil},
+		{name: "empty", candidates: []string{}},
+		{name: "query", candidates: nil, q: "gpt"},
+		{name: "unlimited", candidates: nil, limit: -1},
+	}
+	for _, tc := range cases {
+		t.Run("SearchProviders/"+tc.name, func(t *testing.T) {
+			models, err := s.SearchProviders(ctx, tc.q, tc.candidates, tc.limit)
+			if err != nil {
+				t.Fatalf("SearchProviders: %v", err)
+			}
+			if models == nil || len(models) != 0 {
+				t.Fatalf("models = %#v, want an empty non-nil list", models)
+			}
+		})
+		t.Run("Suggest/"+tc.name, func(t *testing.T) {
+			sugs, err := s.Suggest(ctx, tc.candidates, []string{"gpt-4o", "claude-3-opus"})
+			if err != nil {
+				t.Fatalf("Suggest: %v", err)
+			}
+			if len(sugs) != 2 {
+				t.Fatalf("suggestions len = %d, want 2", len(sugs))
+			}
+			for _, sg := range sugs {
+				if sg.Match != "" || sg.InputPerMTok != nil {
+					t.Fatalf("suggestion %+v matched with no candidates", sg)
+				}
+			}
+		})
 	}
 }
 

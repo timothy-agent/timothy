@@ -736,8 +736,8 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	// BootstrapChain now sources candidate models from the catalog
 	// instead of a per-request Models field: seed a fake LiteLLM
 	// source covering the three fixture models. The provider's
-	// base_url is unrecognized, so CandidateProvidersForRow leaves the
-	// search unrestricted — any litellm_provider value matches.
+	// base_url is unrecognized, which maps to no catalog vendor
+	// (D-171), so options.litellm_provider points it at the fixtures.
 	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"chat-cheap": {"litellm_provider": "openaicompat", "mode": "chat", "input_cost_per_token": 0.000001},
@@ -783,6 +783,7 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "bootstrap", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
+		Options: map[string]string{"litellm_provider": "openaicompat"},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -825,6 +826,7 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	secondID, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "bootstrap2", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "chat-cheap",
+		Options: map[string]string{"litellm_provider": "openaicompat"},
 	})
 	if err != nil {
 		t.Fatalf("Create second provider: %v", err)

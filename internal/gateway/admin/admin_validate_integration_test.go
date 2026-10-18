@@ -4,13 +4,14 @@ package admin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +57,9 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 	if !res.OK || res.Model != "m-alpha" {
 		t.Fatalf("Validate = %+v, want ok probe of m-alpha", res)
 	}
+	if len(res.Models) != 2 || res.Models[0].ID != "m-alpha" || res.Models[1].ID != "m-beta" || res.Models[0].Source != "live" {
+		t.Fatalf("Validate models = %+v, want live m-alpha and m-beta", res.Models)
+	}
 
 	// Nothing persisted: validation must leave no provider row behind.
 	db, _ := pool.Get()
@@ -84,8 +88,8 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate dead endpoint: %v", err)
 	}
-	if res.OK || res.Detail == "" {
-		t.Fatalf("dead endpoint = %+v, want honest failure", res)
+	if res.OK || res.Detail == "" || res.Models != nil {
+		t.Fatalf("dead endpoint = %+v, want honest failure with no model list", res)
 	}
 
 	// Config errors reject before any probe.
@@ -164,10 +168,40 @@ func TestConnectionProbePricesACostedModel(t *testing.T) {
 	}
 }
 
-func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
-	adm, store, _ := testAdmin(t)
+func TestAvailableModelsLiveFirstWithCatalogPrices(t *testing.T) {
 	ctx := t.Context()
-	srv := stubOpenAI(t)
+
+	// httptest binds 127.0.0.1, which candidatesForHost maps to
+	// litellm_provider "ollama": the fixture's ollama rows are the
+	// openaicompat row's candidates; the bedrock and openai rows must never
+	// show up for it.
+	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"m-alpha": {"litellm_provider": "ollama", "mode": "chat", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "max_input_tokens": 32000},
+			"m-image": {"litellm_provider": "ollama", "mode": "image_generation", "input_cost_per_token": 0.000004},
+			"bedrock/anthropic.claude-x": {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015},
+			"bedrock/amazon.titan-embed": {"litellm_provider": "bedrock", "mode": "embedding"},
+			"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}
+		}`))
+	}))
+	defer catSrv.Close()
+	cat := catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), catSrv.URL)
+	if _, err := cat.Sync(ctx); err != nil {
+		t.Fatalf("catalog sync: %v", err)
+	}
+	adm, store, _ := testAdminWithCatalog(t, cat)
+
+	var listCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			http.NotFound(w, r)
+			return
+		}
+		listCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m-alpha"},{"id":"m-image"},{"id":"m-house"}]}`))
+	}))
+	t.Cleanup(srv.Close)
 
 	name := adminMarker + "models"
 	id, err := adm.Create(ctx, Provider{
@@ -182,35 +216,48 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AvailableModels: %v", err)
 	}
-	if len(models) != 2 || models[0].ID != "m-alpha" || models[1].ID != "m-beta" {
-		t.Fatalf("models = %+v", models)
+	if len(models) != 2 {
+		t.Fatalf("models = %+v, want m-alpha and m-house (m-image dropped)", models)
+	}
+	alpha, house := models[0], models[1]
+	if alpha.ID != "m-alpha" || alpha.Source != "live" || !sameF(alpha.InputPerMTok, ptrF(1)) ||
+		!sameF(alpha.OutputPerMTok, ptrF(2)) || !sameI(alpha.MaxInputTokens, ptrI(32000)) {
+		t.Fatalf("m-alpha = %+v, want live with catalog price and context", alpha)
+	}
+	if house.ID != "m-house" || house.Source != "live" || house.InputPerMTok != nil || house.OutputPerMTok != nil || house.MaxInputTokens != nil {
+		t.Fatalf("m-house = %+v, want live with null prices", house)
+	}
+	if _, err := adm.AvailableModels(ctx, id); err != nil {
+		t.Fatalf("AvailableModels again: %v", err)
+	}
+	if n := listCalls.Load(); n != 1 {
+		t.Fatalf("listing calls = %d, want 1 (second call cached)", n)
 	}
 
-	// Bedrock cannot enumerate models; the sentinel drives the UI's
-	// manual-entry fallback (422 at the HTTP layer). Static keys are the
-	// only supported auth (D-048), so the credential_ref must resolve
-	// for the provider to build and reach the serving snapshot at all.
-	bedrockRef := adminMarker + "models-bedrock-key" //nolint:gosec // test fixture name, not a secret
-	if err := adm.SetSecret(ctx, bedrockRef, `{"access_key_id":"AKIA123","secret_access_key":"shh"}`); err != nil {
-		t.Fatalf("SetSecret: %v", err)
-	}
-	bedrockName := adminMarker + "models-bedrock"
-	bid, err := adm.Create(ctx, Provider{
-		Name: bedrockName, Kind: "api", Driver: "bedrock",
-		CredentialRef: bedrockRef, Options: map[string]string{"region": "us-east-1"},
+	// A 401 from the provider is its own auth error, never a catalog list.
+	authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided"}}`))
+	}))
+	t.Cleanup(authSrv.Close)
+	authName := adminMarker + "models-401"
+	aid, err := adm.Create(ctx, Provider{
+		Name: authName, Kind: "api", Driver: "openaicompat",
+		BaseURL: authSrv.URL, DefaultModel: "m-alpha",
 	})
 	if err != nil {
-		t.Fatalf("Create bedrock: %v", err)
+		t.Fatalf("Create 401 provider: %v", err)
 	}
-	waitSnapshot(t, store, bedrockName)
-	if _, err := adm.AvailableModels(ctx, bid); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("bedrock AvailableModels err = %v, want ErrUnsupported", err)
+	waitSnapshot(t, store, authName)
+	if _, err := adm.AvailableModels(ctx, aid); err == nil ||
+		!strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Incorrect API key provided") {
+		t.Fatalf("401 AvailableModels err = %v, want the provider's auth error", err)
 	}
 
 	// kind='cli' rows never build a chat driver at all (D-051); only
 	// cursor-cli has a models-listing endpoint of its own. claude-cli
-	// (subscription auth, no such endpoint) must reject as ErrUnsupported
-	// rather than fail on "not in the serving snapshot".
+	// (subscription auth, no such endpoint) falls back to the catalog
+	// rather than failing on "not in the serving snapshot".
 	claudeCliName := adminMarker + "models-claude-cli"
 	ccid, err := adm.Create(ctx, Provider{
 		Name: claudeCliName, Kind: "cli", Driver: "claude-cli", CredentialRef: "CC_TOKEN",
@@ -218,8 +265,12 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create claude-cli: %v", err)
 	}
-	if _, err := adm.AvailableModels(ctx, ccid); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("claude-cli AvailableModels err = %v, want ErrUnsupported", err)
+	ccModels, err := adm.AvailableModels(ctx, ccid)
+	if err != nil {
+		t.Fatalf("claude-cli AvailableModels: %v", err)
+	}
+	if len(ccModels) != 0 {
+		t.Fatalf("claude-cli models = %+v, want none (fixture has no anthropic rows)", ccModels)
 	}
 
 	// cursor-cli calls its own listing endpoint directly, bypassing the
@@ -248,7 +299,8 @@ func TestAvailableModelsProxiesAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cursor-cli AvailableModels: %v", err)
 	}
-	if len(cursorModels) != 1 || cursorModels[0].ID != "composer-2.5" || cursorModels[0].DisplayName != "Composer 2.5" {
+	if len(cursorModels) != 1 || cursorModels[0].ID != "composer-2.5" || cursorModels[0].DisplayName != "Composer 2.5" ||
+		cursorModels[0].Source != "live" || cursorModels[0].InputPerMTok != nil {
 		t.Fatalf("cursor-cli models = %+v", cursorModels)
 	}
 }

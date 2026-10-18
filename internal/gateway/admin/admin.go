@@ -77,11 +77,12 @@ type Admin struct {
 	budgets *ledger.BudgetStore
 	secrets *secretstore.Store
 	catalog *catalog.Store
+	models  *modelsCache
 	log     *slog.Logger
 }
 
 func New(db *pgpool.Pool, store *router.Store, rec ledger.Recorder, budgets *ledger.BudgetStore, secrets *secretstore.Store, cat *catalog.Store, log *slog.Logger) *Admin {
-	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, catalog: cat, log: log}
+	return &Admin{db: db, store: store, rec: rec, budgets: budgets, secrets: secrets, catalog: cat, models: newModelsCache(), log: log}
 }
 
 // SetSecret pins refName's value to built-in storage regardless of the
@@ -1387,25 +1388,32 @@ func (a *Admin) setOpenAIResponses(ctx context.Context, id string, ok bool) erro
 	return nil
 }
 
+// ValidateResult is Validate's probe outcome plus the unsaved config's
+// model list (D-172), null when the probe failed or the listing did.
+type ValidateResult struct {
+	TestResult
+	Models []ListedModel `json:"models"`
+}
+
 // Validate runs the same one-token probe as Test against a provider
 // config that has NOT been persisted — the UI's validate-on-create.
 // The credential_ref must already resolve (the key is stored before
 // validation), so a passing validation means the provider is born
 // working.
-func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestResult, error) {
+func (a *Admin) Validate(ctx context.Context, p Provider, model string) (ValidateResult, error) {
 	if err := validateProvider(p); err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	if model == "" {
 		model = p.DefaultModel
 	}
 	if model == "" {
-		return TestResult{}, fmt.Errorf("a model is required to validate a provider")
+		return ValidateResult{}, fmt.Errorf("a model is required to validate a provider")
 	}
 
 	timeout, err := parseRequestTimeout(p.Options)
 	if err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	reg, err := provider.Build([]provider.Config{{
 		Name:            p.Name,
@@ -1420,7 +1428,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		Timeout:         timeout,
 	}}, a.credentialLookup())
 	if err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	drv, _ := reg.Get(p.Name)
 
@@ -1433,41 +1441,24 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, probeTO)
 	}
 	a.audit(ctx, "validate", "provider", p.Name, nil, res)
-	return res, nil
+	out := ValidateResult{TestResult: res}
+	if res.OK {
+		out.Models = a.validatedModels(ctx, p, model, drv)
+	}
+	return out, nil
 }
 
-// AvailableModels proxies the provider's own model-listing endpoint.
-// Drivers that cannot enumerate models (bedrock) return an error the
-// UI turns into its manual-entry fallback. kind='cli' rows never build
-// a chat driver (D-051, BuildSnapshot skips them entirely) so they
-// never reach the serving snapshot below; cursor-cli is the one cli
-// driver with a listing endpoint of its own, called directly.
-func (a *Admin) AvailableModels(ctx context.Context, id string) ([]provider.AvailableModel, error) {
-	p, err := a.get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if p.Kind == "cli" {
-		if p.Driver != "cursor-cli" {
-			return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
+// cliproxyVendorModels keeps only the ids a cliproxy row's vendor
+// serves (catalog.CliproxyServes); other rows pass through unchanged.
+func cliproxyVendorModels(p Provider, models []provider.AvailableModel) []provider.AvailableModel {
+	hints := []string{p.Name, p.DefaultModel}
+	out := make([]provider.AvailableModel, 0, len(models))
+	for _, m := range models {
+		if catalog.CliproxyServes(p.BaseURL, hints, m.ID) {
+			out = append(out, m)
 		}
-		return a.cursorAvailableModels(ctx, p)
 	}
-	snap := a.store.Snapshot()
-	if snap == nil {
-		return nil, fmt.Errorf("routing configuration not loaded yet")
-	}
-	drv, ok := snap.Provider(p.Name)
-	if !ok {
-		return nil, fmt.Errorf("provider %s not in the serving snapshot; wait for the next reload", p.Name)
-	}
-	lister, ok := drv.(provider.ModelLister)
-	if !ok {
-		return nil, fmt.Errorf("driver %s cannot list models: %w", p.Driver, ErrUnsupported)
-	}
-	lctx, cancel := context.WithTimeout(ctx, testTimeout)
-	defer cancel()
-	return lister.ListModels(lctx)
+	return out
 }
 
 // credentialLookup mirrors the router store's resolver: a ref that
@@ -1650,9 +1641,8 @@ func (a *Admin) probeResponses(ctx context.Context, baseURL, credentialRef, mode
 
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
-	ErrNotFound    = fmt.Errorf("not found")
-	ErrInUse       = fmt.Errorf("in use")
-	ErrUnsupported = fmt.Errorf("unsupported")
+	ErrNotFound = fmt.Errorf("not found")
+	ErrInUse    = fmt.Errorf("in use")
 	// ErrUpstream marks a failure reaching a third-party API the gateway
 	// itself calls out to (e.g. Cursor's model listing): a 502, not a
 	// 400, since the request was fine but the upstream wasn't reachable.

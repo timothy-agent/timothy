@@ -2,7 +2,6 @@ package provider
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +12,7 @@ import (
 // records the last request body and headers.
 type layaStub struct {
 	srv    *httptest.Server
-	got    layaRequest
+	got    systemoneRequest
 	auth   string
 	answer string
 	status int
@@ -45,7 +44,7 @@ func newLayaStub(t *testing.T, answer string) *layaStub {
 
 func TestLayaCapabilitiesAndStream(t *testing.T) {
 	t.Parallel()
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: "http://laya:8000"})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: "http://laya:8000"})
 	if caps := l.Capabilities(); len(caps) != 1 || caps[0] != CapDecide {
 		t.Fatalf("capabilities = %v, want decide only", caps)
 	}
@@ -61,17 +60,17 @@ func TestLayaCapabilitiesAndStream(t *testing.T) {
 func TestLayaDecideChoice(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL, APIKey: "k"})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL, APIKey: "k"})
 
 	res, usage, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
-		Options:  []string{"coding", "research", "general"},
+		Options:  optIDs("coding", "research", "general"),
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if res.Choice != "research" || res.Scores["research"] != 0.85 || res.Score != nil {
+	if res.Choice != "research" || res.Scores["research"] != 0.85 {
 		t.Fatalf("res = %+v", res)
 	}
 	if usage == nil || usage.InputTokens != 83 {
@@ -99,13 +98,13 @@ func TestLayaDecideChoice(t *testing.T) {
 func TestLayaDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 
 	res, _, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Classify this goal.",
 		State:    "Write a go compiler",
-		Options:  []string{"coding: writes code", "general: documents"},
+		Options:  []DecideOption{{ID: "coding", Description: "writes code"}, {ID: "general", Description: "documents"}},
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -122,15 +121,15 @@ func TestLayaDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	}
 	crit, ok := q.Criteria.(map[string]any)
 	if !ok || crit["coding"] != "writes code" || crit["general"] != "documents" {
-		t.Fatalf("crit = %+v, want split id: description", crit)
+		t.Fatalf("crit = %+v, want each id mapped to its description", crit)
 	}
 }
 
 func TestLayaDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"other","probabilities":{"other":1}}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-	_, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"a", "b"}})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
+	_, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: optIDs("a", "b")})
 	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("err = %v, want 'not an allowed option'", err)
 	}
@@ -154,8 +153,8 @@ func TestLayaDecideYesNo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := newLayaStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
-			l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
+			l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
+			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: optIDs("yes", "no")})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -170,84 +169,11 @@ func TestLayaDecideYesNo(t *testing.T) {
 	}
 }
 
-// TestLayaDecideScore pins that score questions use type "score" with level
-// descriptions and map the resulting ordinal scale onto [0, 1].
-func TestLayaDecideScore(t *testing.T) {
-	t.Parallel()
-
-	t.Run("default criteria 4 levels", func(t *testing.T) {
-		t.Parallel()
-		// 4 levels -> 0 to 3 scale; raw 1.5 -> 1.5 / 3 = 0.5
-		stub := newLayaStub(t, `{"type":"score","score":1.5,"probabilities":{"0":0.1,"1":0.3,"2":0.4,"3":0.2}}`)
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-		res, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "How relevant is this document?"})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.5) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.5", res.Score)
-		}
-		if res.Choice != "" {
-			t.Fatalf("res.Choice = %q, want empty", res.Choice)
-		}
-		if usage == nil || usage.InputTokens != 83 {
-			t.Fatalf("usage = %+v", usage)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 4 {
-			t.Fatalf("criteria = %v, want 4 levels", q.Criteria)
-		}
-	})
-
-	t.Run("custom 3 levels 0 to 2 scale", func(t *testing.T) {
-		t.Parallel()
-		// 3 levels -> 0 to 2 scale; raw 1.84 -> 1.84 / 2 = 0.92
-		stub := newLayaStub(t, `{"type":"score","score":1.84,"probabilities":{"0":0.05,"1":0.11,"2":0.84}}`)
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-		res, _, err := l.Decide(t.Context(), "", DecideRequest{
-			Kind:     DecideScore,
-			Question: "How urgent is this incident?",
-			Options:  []string{"not urgent", "soon", "blocking"},
-		})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.92) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.92", res.Score)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 3 {
-			t.Fatalf("criteria = %v, want 3 levels", q.Criteria)
-		}
-	})
-}
-
-func TestLayaDecideScoreOutsideRangeIsAnError(t *testing.T) {
-	t.Parallel()
-	// On 4 default levels (0-3 scale), raw < 0 or > 3 must error
-	for _, badScore := range []string{"-0.1", "3.5"} {
-		stub := newLayaStub(t, `{"type":"score","score":`+badScore+`}`)
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
-		if err == nil || !strings.Contains(err.Error(), "outside [0, 3]") {
-			t.Fatalf("score %s: err = %v, want 'outside [0, 3]'", badScore, err)
-		}
-	}
-}
-
 func TestLayaDecideMissingAnswerIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"a"}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-	if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil || !strings.Contains(err.Error(), "no noul probability") {
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
+	if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: optIDs("yes", "no")}); err == nil || !strings.Contains(err.Error(), "no noul probability") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -263,8 +189,8 @@ func TestLayaBaseURLNormalization(t *testing.T) {
 	defer srv.Close()
 
 	for _, u := range []string{srv.URL, srv.URL + "/v1", srv.URL + "/v1/systemone"} {
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: u})
-		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"coding", "research"}})
+		l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: u})
+		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: optIDs("coding", "research")})
 		if err != nil {
 			t.Fatalf("Decide with BaseURL %q: %v", u, err)
 		}
@@ -279,8 +205,8 @@ func TestLayaDecideHTTPErrorsSurface(t *testing.T) {
 	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusServiceUnavailable} {
 		stub := newLayaStub(t, `{}`)
 		stub.status = status
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-		if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil {
+		l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
+		if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: optIDs("yes", "no")}); err == nil {
 			t.Fatalf("status %d: no error", status)
 		}
 	}
@@ -289,7 +215,7 @@ func TestLayaDecideHTTPErrorsSurface(t *testing.T) {
 func TestLayaListModels(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 	models, err := l.ListModels(t.Context())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)

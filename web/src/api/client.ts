@@ -59,6 +59,7 @@ import type {
   UnpricedGroup,
   UsagePoint,
   UsageSummary,
+  ValidateResult,
 } from './types'
 
 const tokenKey = 'timothy.token'
@@ -778,20 +779,20 @@ export async function testProvider(id: string, model?: string): Promise<TestResu
 
 // validateProvider probes an UNSAVED provider config with a one-token
 // completion: the add dialog's validate-on-create. Probe failures come
-// back as { ok: false, detail }; only invalid configs throw.
+// back as { ok: false, detail }; only invalid configs throw. A passing
+// probe also carries the config's model list (D-172).
 export async function validateProvider(
   p: Partial<AdminProvider>,
   model: string,
-): Promise<TestResult> {
-  return request<TestResult>('/v1/admin/providers/validate', {
+): Promise<ValidateResult> {
+  return request<ValidateResult>('/v1/admin/providers/validate', {
     method: 'POST',
     body: JSON.stringify({ ...p, model }),
   })
 }
 
-// availableModels proxies the provider's own model-listing endpoint.
-// Throws ChatError with status 422 when the driver cannot list models
-// (bedrock): callers fall back to manual entry.
+// availableModels fetches the provider's one model list (D-172): live
+// ids when the driver can list, else the catalog rows for its vendors.
 export async function availableModels(id: string): Promise<AvailableModel[]> {
   const { models } = await request<{ models: AvailableModel[] }>(
     `/v1/admin/providers/${id}/models`,
@@ -824,27 +825,6 @@ export async function searchCatalog(
   const params = new URLSearchParams({ q, provider, limit: String(limit) })
   const { models } = await request<{ models: CatalogModel[] }>(
     `/v1/admin/catalog/models?${params}`,
-  )
-  return models ?? []
-}
-
-// catalogModelsForProvider searches the synced catalog restricted to a
-// provider's candidate litellm_provider(s) (derived server-side from
-// its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
-//: the model id picker's live suggestion source, and the provider
-// detail page's read-only Models list. q filters case-insensitive
-// substring on model_key; omitted fetches the provider's whole
-// candidate pool. limit defaults to the server's normal cap (50);
-// pass the server's max (200) for a page that wants the whole pool.
-export async function catalogModelsForProvider(
-  providerId: string,
-  q = '',
-  limit?: number,
-): Promise<CatalogModel[]> {
-  const params = new URLSearchParams({ ...(q ? { q } : {}), ...(limit ? { limit: String(limit) } : {}) })
-  const qs = params.size > 0 ? `?${params}` : ''
-  const { models } = await request<{ models: CatalogModel[] }>(
-    `/v1/admin/providers/${providerId}/catalog-models${qs}`,
   )
   return models ?? []
 }

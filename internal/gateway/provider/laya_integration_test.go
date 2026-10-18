@@ -15,7 +15,7 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	if base == "" {
 		t.Skip("LAYA_URL not set; skipping laya live test")
 	}
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: base})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: base})
 
 	models, err := l.ListModels(t.Context())
 	if err != nil || len(models) == 0 {
@@ -25,7 +25,7 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	res, usage, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which department should handle this request?",
-		Options:  []string{"billing", "technical", "sales"},
+		Options:  optIDs("billing", "technical", "sales"),
 	})
 	if err != nil {
 		t.Fatalf("choice: %v", err)
@@ -40,17 +40,9 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	res, _, err = l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideYesNo,
 		Question: "Does the user explicitly request a refund?",
-		Options:  []string{"yes", "no"},
+		Options:  optIDs("yes", "no"),
 	})
 	if err != nil || (res.Choice != "yes" && res.Choice != "no") {
 		t.Fatalf("yesno res = %+v err = %v", res, err)
-	}
-
-	res, _, err = l.Decide(t.Context(), "typed-decisions", DecideRequest{
-		Kind:     DecideScore,
-		Question: "The user is asking about the weather.",
-	})
-	if err != nil || res.Score == nil || *res.Score < 0 || *res.Score > 1 {
-		t.Fatalf("score res = %+v err = %v", res, err)
 	}
 }

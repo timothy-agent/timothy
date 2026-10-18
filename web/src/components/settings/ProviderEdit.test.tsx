@@ -8,7 +8,6 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 vi.mock('../../api/client', () => ({
   availableModels: vi.fn(),
-  catalogModelsForProvider: vi.fn(),
   deleteProvider: vi.fn(),
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
@@ -25,7 +24,6 @@ vi.mock('../../api/client', () => ({
 
 import {
   availableModels,
-  catalogModelsForProvider,
   deleteProvider,
   listProviders,
   listSecretBackends,
@@ -139,7 +137,6 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
-  vi.mocked(catalogModelsForProvider).mockResolvedValue([])
   vi.mocked(availableModels).mockResolvedValue([])
   vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
   vi.mocked(listSecretBackends).mockResolvedValue([
@@ -725,31 +722,60 @@ describe('ProviderEdit default model field', () => {
     )
   })
 
-  it('picking a suggestion stages it, and Save sends the PATCH', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([
-      {
-        id: 'amazon.nova-lite-v1:0',
-        model_key: 'amazon.nova-lite-v1:0',
-        litellm_provider: 'bedrock',
-        mode: 'chat',
-        input_per_mtok: 0.06,
-        output_per_mtok: 0.24,
-      },
+  it('picking a suggestion from the unified list stages it, and Save sends the PATCH', async () => {
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'amazon.nova-lite-v1:0', source: 'catalog', input_per_mtok: 0.06, output_per_mtok: 0.24 },
+      { id: 'amazon.nova-pro-v1:0', source: 'catalog' },
     ])
     vi.mocked(patchProvider).mockResolvedValue()
     renderPage()
 
     const input = await screen.findByPlaceholderText('model id')
+    await waitFor(() => expect(availableModels).toHaveBeenCalledWith('p1'))
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: 'nova-lite' } })
 
     fireEvent.click(await screen.findByRole('option', { name: /amazon\.nova-lite-v1:0/ }))
+    expect(screen.queryByRole('option', { name: /amazon\.nova-pro-v1:0/ })).not.toBeInTheDocument()
     expect(patchProvider).not.toHaveBeenCalled()
 
     fireEvent.click(formSaveButton())
     await waitFor(() =>
       expect(patchProvider).toHaveBeenCalledWith('p1', expect.objectContaining({ default_model: 'amazon.nova-lite-v1:0' })),
     )
+  })
+
+  it('filters suggestions client-side by substring', async () => {
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'qwen3', source: 'live' },
+      { id: 'llama3.3', source: 'live' },
+    ])
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('model id')
+    await waitFor(() => expect(availableModels).toHaveBeenCalledTimes(1))
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'llama' } })
+
+    expect(await screen.findByRole('option', { name: /llama3\.3/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /qwen3/ })).not.toBeInTheDocument()
+    expect(availableModels).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers the default model as the one suggestion and the typed-id hint when the list is empty', async () => {
+    vi.mocked(availableModels).mockResolvedValue([])
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('model id')
+    expect(await screen.findByText(/Used when a route chain entry for this provider names no model\. This provider lists no models/)).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    const options = await screen.findAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('qwen3')
   })
 
   it('omits the section for a kind=cli provider (it gets its own alias picker instead)', async () => {
@@ -762,55 +788,62 @@ describe('ProviderEdit default model field', () => {
   })
 })
 
-describe('ProviderEdit catalog models table', () => {
-  it('renders every fetched catalog model with a price, no interactive controls', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([
-      {
-        id: 'amazon.nova-lite-v1:0',
-        model_key: 'amazon.nova-lite-v1:0',
-        litellm_provider: 'bedrock',
-        mode: 'chat',
-        max_input_tokens: 300000,
-        input_per_mtok: 0.06,
-        output_per_mtok: 0.24,
-      },
-      {
-        id: 'amazon.titan-embed-text-v1',
-        model_key: 'amazon.titan-embed-text-v1',
-        litellm_provider: 'bedrock',
-        mode: 'embedding',
-      },
+describe('ProviderEdit models panel', () => {
+  it('titles a live list "Models your key can use" with price and context columns', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'qwen3', source: 'live', input_per_mtok: 0.06, output_per_mtok: 0.24, max_input_tokens: 300000 },
+      { id: 'house-model', source: 'live', input_per_mtok: null, output_per_mtok: null, max_input_tokens: null },
     ])
-    renderPage()
+    renderPage('p2')
 
-    expect(await screen.findByText('amazon.nova-lite-v1:0')).toBeInTheDocument()
+    expect(await screen.findByText('Models your key can use · 2')).toBeInTheDocument()
     expect(screen.getByText('in $0.06 · out $0.24 /MTok')).toBeInTheDocument()
     expect(screen.getByText('300k ctx')).toBeInTheDocument()
-    expect(screen.getByText('amazon.titan-embed-text-v1')).toBeInTheDocument()
+    expect(screen.getByText('house-model')).toBeInTheDocument()
     expect(screen.getByText('unpriced')).toBeInTheDocument()
 
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument()
   })
 
-  it('shows a message when the catalog has no matching models', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+  it('titles a catalog fallback "Models from catalog"', async () => {
+    vi.mocked(availableModels).mockResolvedValue([{ id: 'amazon.nova-lite-v1:0', source: 'catalog' }])
     renderPage()
 
-    expect(await screen.findByText('no catalog models found')).toBeInTheDocument()
+    expect(await screen.findByText('Models from catalog · 1')).toBeInTheDocument()
+    expect(screen.queryByText(/Models your key can use/)).not.toBeInTheDocument()
   })
 
-  it('debounces the filter box into a single catalog search call with the typed query', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+  it('shows the typed-id hint when the list is empty', async () => {
+    vi.mocked(availableModels).mockResolvedValue([])
+    renderPage()
+
+    expect(await screen.findByText('no models found')).toBeInTheDocument()
+    expect(screen.getAllByText('This provider lists no models. Type any model id it accepts.').length).toBeGreaterThan(0)
+  })
+
+  it('shows the listing error instead of an empty message', async () => {
+    vi.mocked(availableModels).mockRejectedValue(new Error('http 401: Incorrect API key provided'))
+    renderPage()
+
+    expect(await screen.findByText(/Could not list models: .*Incorrect API key provided/)).toBeInTheDocument()
+  })
+
+  it('filters the list client-side without another fetch', async () => {
+    vi.mocked(availableModels).mockResolvedValue([
+      { id: 'amazon.nova-lite-v1:0', source: 'catalog' },
+      { id: 'anthropic.claude-x', source: 'catalog' },
+    ])
     renderPage()
 
     const filter = await screen.findByPlaceholderText('filter by model id…')
-    fireEvent.change(filter, { target: { value: 'nov' } })
+    await screen.findByText('anthropic.claude-x')
     fireEvent.change(filter, { target: { value: 'nova' } })
 
-    await waitFor(() => expect(catalogModelsForProvider).toHaveBeenCalledWith('p1', 'nova', 200))
-    expect(catalogModelsForProvider).not.toHaveBeenCalledWith('p1', 'nov', 200)
+    expect(screen.getByText('amazon.nova-lite-v1:0')).toBeInTheDocument()
+    expect(screen.queryByText('anthropic.claude-x')).not.toBeInTheDocument()
+    expect(availableModels).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -825,7 +858,6 @@ describe('ProviderEdit cli (subscription) provider', () => {
   })
 
   it('offers the CLI aliases as suggestions in the default model picker', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
@@ -839,19 +871,13 @@ describe('ProviderEdit cli (subscription) provider', () => {
     expect(screen.getByRole('option', { name: /^haiku/ })).toBeInTheDocument()
   })
 
-  it('adds a catalog model not already among the CLI aliases to the suggestion list', async () => {
-    vi.mocked(catalogModelsForProvider).mockResolvedValue([
-      {
-        id: 'claude-opus-4-6-20261015',
-        model_key: 'claude-opus-4-6-20261015',
-        litellm_provider: 'anthropic',
-        mode: 'chat',
-      },
-    ])
+  it('adds a listed model not already among the CLI aliases to the suggestion list', async () => {
+    vi.mocked(availableModels).mockResolvedValue([{ id: 'claude-opus-4-6-20261015', source: 'catalog' }])
     vi.mocked(listProviders).mockResolvedValue([cliProvider])
     renderPage('p3')
 
     const input = await screen.findByPlaceholderText('sonnet')
+    await waitFor(() => expect(availableModels).toHaveBeenCalledWith('p3'))
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.focus(input)
 

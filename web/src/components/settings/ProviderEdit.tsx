@@ -3,8 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
-  availableModels,
-  catalogModelsForProvider,
   deleteProvider,
   listProviders,
   patchProvider,
@@ -16,7 +14,7 @@ import {
   subscriptionAuthStatus,
   testProvider,
 } from '../../api/client'
-import type { AdminProvider } from '../../api/types'
+import type { AdminProvider, AvailableModel } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
@@ -30,7 +28,8 @@ import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
 import { ExistingCredentialSelect } from './CredentialRefPicker'
-import { catalogRowID, ModelPicker, priceLabel, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
+import { ModelPicker, type ModelSuggestion, priceLabel } from './ModelPicker'
+import { listedSuggestions, type ModelList, typedIdHint, useModelList } from './modelList'
 import { OptionStringField } from './OptionStringField'
 import { bedrockRegions, matchPreset } from '../../lib/providerPresets'
 import { ProviderLogo } from '../timothy/provider-logo'
@@ -49,13 +48,6 @@ const area = settingsArea('providers')
 // declared-models list. 'fable' verified as a recognized alias in the
 // sandbox image (unknown aliases trip a CLI warning, fable doesn't).
 const cliModelAliases = ['fable', 'sonnet', 'opus', 'haiku']
-
-// providerCatalogSearchLimit fetches this provider's whole candidate
-// pool rather than the server's normal 50-row cap, since a read-only
-// browsing list should show everything, not just a first page, and
-// there's no "load more" affordance here (only the search box narrows
-// it further).
-const providerCatalogSearchLimit = 200
 
 interface StagedProvider {
   name: string
@@ -180,6 +172,11 @@ function ProviderEditForm({
 
   const staged = useStagedForm<StagedProvider>(baselineFrom(initialProvider))
   const test = useProviderTestState()
+  const modelList = useModelList(provider.id)
+  const modelSuggestions = useMemo(
+    () => listedSuggestions(modelList.models, provider.default_model),
+    [modelList.models, provider.default_model],
+  )
 
   const doRefresh = useCallback(async () => {
     const refetched = await refresh()
@@ -353,10 +350,27 @@ function ProviderEditForm({
           )}
 
           {isCli ? (
-            <CliModelField provider={provider} value={staged.values.default_model} onChange={(v) => staged.setField('default_model', v)} />
+            <CliModelField
+              provider={provider}
+              models={modelList.models}
+              value={staged.values.default_model}
+              onChange={(v) => staged.setField('default_model', v)}
+            />
           ) : (
-            <Field label="Default model" description="Used when a route chain entry for this provider names no model.">
-              <DefaultModelPicker provider={provider} value={staged.values.default_model} onChange={(v) => staged.setField('default_model', v)} />
+            <Field
+              label="Default model"
+              description={
+                modelList.loaded && modelList.models.length === 0
+                  ? `Used when a route chain entry for this provider names no model. ${typedIdHint}`
+                  : 'Used when a route chain entry for this provider names no model.'
+              }
+            >
+              <ModelPicker
+                value={staged.values.default_model}
+                onChange={(v) => staged.setField('default_model', v)}
+                suggestions={modelSuggestions}
+                placeholder="model id"
+              />
             </Field>
           )}
         </FieldGroup>
@@ -444,7 +458,7 @@ function ProviderEditForm({
 
       {!isCli && (
         <div className="mt-10">
-          <ProviderCatalogPanel provider={provider} />
+          <ProviderModelsPanel list={modelList} />
         </div>
       )}
 
@@ -777,54 +791,28 @@ function CredentialPanel({
 
 function CliModelField({
   provider,
+  models,
   value,
   onChange,
 }: {
   provider: AdminProvider
+  models: AvailableModel[]
   value: string
   onChange: (v: string) => void
 }) {
   // Cursor has its own model slug namespace (not the Claude Code CLI's
-  // aliases, and not filed under any catalog provider), so its picker
-  // gets no alias pinning and no catalog-backed suggestions. Instead it
-  // fetches Cursor's own live model list.
+  // aliases), so its picker gets no alias pinning, only its own list.
   const isCursor = provider.driver === 'cursor-cli'
 
-  const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
-  const catalogModels = useCatalogSearch(value, search)
-
-  // cursorModels is Cursor's own live list (GET .../providers/:id/models,
-  // gateway-cached ~5min). Fetched once per provider id; failures or an
-  // empty list just fall back to free text, no error toast, since this is
-  // an advisory suggestion list, not a required lookup.
-  const [cursorModels, setCursorModels] = useState<ModelSuggestion[]>([])
-  useEffect(() => {
-    if (!isCursor) return
-    let cancelled = false
-    availableModels(provider.id).then(
-      (models) => {
-        if (!cancelled) setCursorModels(models.map((m) => ({ id: m.id, name: m.display_name })))
-      },
-      () => {
-        if (!cancelled) setCursorModels([])
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [isCursor, provider.id])
-
   const suggestions: ModelSuggestion[] = useMemo(() => {
-    if (isCursor) return cursorModels
+    const listed = listedSuggestions(models, provider.default_model)
+    if (isCursor) return listed
     const seen = new Map<string, ModelSuggestion>(cliModelAliases.map((a) => [a, { id: a }]))
-    for (const m of catalogModels) {
-      const id = catalogRowID(m)
-      if (!seen.has(id)) {
-        seen.set(id, { id, input_per_mtok: m.input_per_mtok, output_per_mtok: m.output_per_mtok })
-      }
+    for (const s of listed) {
+      if (!seen.has(s.id)) seen.set(s.id, s)
     }
     return [...seen.values()]
-  }, [catalogModels, isCursor, cursorModels])
+  }, [models, provider.default_model, isCursor])
 
   return (
     <Field
@@ -845,46 +833,31 @@ function CliModelField({
   )
 }
 
-function DefaultModelPicker({
-  provider,
-  value,
-  onChange,
-}: {
-  provider: AdminProvider
-  value: string
-  onChange: (v: string) => void
-}) {
-  const search = useCallback((q: string) => catalogModelsForProvider(provider.id, q), [provider.id])
-  const catalogModels = useCatalogSearch(value, search)
-
-  const suggestions: ModelSuggestion[] = useMemo(
-    () => catalogModels.map((m) => ({ id: catalogRowID(m), input_per_mtok: m.input_per_mtok, output_per_mtok: m.output_per_mtok })),
-    [catalogModels],
-  )
-
-  return <ModelPicker value={value} onChange={onChange} suggestions={suggestions} placeholder="model id" />
-}
-
-// ProviderCatalogPanel is a read-only, searchable table of every
-// catalog model within this provider's candidate litellm_provider(s).
-// Model *selection* for actual use lives solely on the Routes page;
-// this is purely "what's available and what it costs."
-function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
+// ProviderModelsPanel is a read-only, filterable table of the
+// provider's model list (D-172): live ids with catalog prices, or the
+// catalog fallback. Model *selection* for actual use lives on the
+// Routes page.
+function ProviderModelsPanel({ list }: { list: ModelList }) {
   const [q, setQ] = useState('')
-  const search = useCallback(
-    (query: string) => catalogModelsForProvider(provider.id, query, providerCatalogSearchLimit),
-    [provider.id],
-  )
-  const models = useCatalogSearch(q, search)
-  const capped = models.length >= providerCatalogSearchLimit
+  const { models, error } = list
+  const live = models[0]?.source === 'live'
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    if (!needle) return models
+    return models.filter(
+      (m) => m.id.toLowerCase().includes(needle) || m.display_name?.toLowerCase().includes(needle),
+    )
+  }, [models, q])
+
+  const title = models.length === 0 ? 'Models' : live ? 'Models your key can use' : 'Models from catalog'
 
   return (
     <Panel
-      title={capped ? `Models · ${models.length}+` : `Models · ${models.length}`}
+      title={`${title} · ${models.length}`}
       description={
-        capped
-          ? 'Chat models are listed first. Filter by id to reach the rest of this catalog, including embeddings and image models.'
-          : 'Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routing page.'
+        live
+          ? 'Listed live by this provider, with catalog prices where known. Pick which one actually runs on the Routing page.'
+          : 'This provider cannot list its models, so these come from the price catalog. Pick which one actually runs on the Routing page.'
       }
       density="operational"
     >
@@ -900,24 +873,26 @@ function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {models.map((m) => {
-            const id = catalogRowID(m)
-            return (
-              <TableRow key={m.model_key}>
-                <TableCell className="font-mono">{id}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {m.max_input_tokens != null ? `${Math.round(m.max_input_tokens / 1000)}k ctx` : ''}
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                  {priceLabel({ id, input_per_mtok: m.input_per_mtok, output_per_mtok: m.output_per_mtok })}
-                </TableCell>
-              </TableRow>
-            )
-          })}
-          {models.length === 0 && (
+          {filtered.map((m) => (
+            <TableRow key={m.id}>
+              <TableCell className="font-mono">{m.id}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {m.max_input_tokens != null ? `${Math.round(m.max_input_tokens / 1000)}k ctx` : ''}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                {priceLabel({
+                  id: m.id,
+                  input_per_mtok: m.input_per_mtok ?? undefined,
+                  output_per_mtok: m.output_per_mtok ?? undefined,
+                })}
+              </TableCell>
+            </TableRow>
+          ))}
+          {filtered.length === 0 && (
             <TableRow>
               <TableCell colSpan={3} className="text-muted-foreground">
-                no catalog models found
+                {!list.loaded ? 'loading models…' : error ? `Could not list models: ${error}` : 'no models found'}
+                {q === '' && <span className="block">{typedIdHint}</span>}
               </TableCell>
             </TableRow>
           )}

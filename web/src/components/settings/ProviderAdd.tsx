@@ -15,7 +15,7 @@ import {
   validateProvider,
   type SecretRefEntry,
 } from '../../api/client'
-import type { TestResult } from '../../api/types'
+import type { AvailableModel, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -25,6 +25,7 @@ import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
 import { CredentialField, type CredentialMode } from './CredentialRefPicker'
 import { catalogMatchForID, catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
+import { listedSuggestions, typedIdHint } from './modelList'
 import { bedrockRegions, providerPresets, type ProviderPreset } from '../../lib/providerPresets'
 import { ProviderLogo } from '../timothy/provider-logo'
 import { settingsArea } from './settingsAreas'
@@ -55,8 +56,7 @@ function referentsOf(refs: SecretRefEntry[], ref: string): string[] {
 // presetLitellmProvider maps a preset id to the litellm_provider value
 // its models are filed under in the synced catalog, mirroring
 // catalog.CandidateProviders' driver/host mapping for this fixed set
-// of presets. '' means no restriction, same as an unrecognized
-// driver/host server-side.
+// of presets. '' means no restriction.
 function presetLitellmProvider(presetId: string): string {
   return {
     openrouter: 'openrouter',
@@ -115,6 +115,9 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const [keyError, setKeyError] = useState<string | null>(null)
   const [test, setTest] = useState<TestResult | null>(null)
   const [tested, setTested] = useState(false)
+  // validated is the model list a passing validation returned for this
+  // config, with the model it validated; null until then.
+  const [validated, setValidated] = useState<{ models: AvailableModel[]; model: string } | null>(null)
   const [bedrockAuth, setBedrockAuth] = useState<BedrockAuthMode>('static')
   // credMode picks between typing a new secret (default) and reusing a
   // stored ref, only offered for the plain (non-bedrock-split,
@@ -148,8 +151,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   // Live type-ahead over this preset's catalog rows, keyed on the
   // typed model id, presetLitellmProvider mirrors the gateway's
   // catalog.CandidateProviders mapping for the fixed set of presets
-  // this form offers; an unmapped preset searches the whole catalog,
-  // same as an unrecognized driver/host does server-side.
+  // this form offers; an unmapped preset searches the whole catalog.
   const catalogSearch = useCallback(
     (q: string) => (preset ? searchCatalog(q, presetLitellmProvider(preset.id)) : Promise.resolve([])),
     [preset],
@@ -172,6 +174,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
     setKeyError(null)
     setTest(null)
     setTested(false)
+    setValidated(null)
     setCredMode('new')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
@@ -183,12 +186,13 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
     setRef(refFor(preset, name, takenRefs))
   }, [preset, name, refEdited, takenRefs])
 
-  // Model suggestions: the preset's own validated default, plus the
-  // live synced catalog for this preset (ids only, the catalog
-  // carries no friendly names). Advisory only, never blocks a
-  // free-typed id.
+  // Model suggestions: after a passing validation, the config's own
+  // model list (D-172). Before it, the preset's validated default plus
+  // the synced catalog for this preset (ids only, the catalog carries
+  // no friendly names). Advisory only, never blocks a free-typed id.
   const modelSuggestions: ModelSuggestion[] = useMemo(() => {
     if (!preset) return []
+    if (validated) return listedSuggestions(validated.models, validated.model)
     const seen = new Map<string, ModelSuggestion>()
     if (preset.validateModel && !seen.has(preset.validateModel)) {
       const catalogMatch = catalogMatchForID(preset.validateModel, catalogModels)
@@ -209,7 +213,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       }
     }
     return [...seen.values()]
-  }, [preset, catalogModels])
+  }, [preset, catalogModels, validated])
 
   if (!preset) return <Navigate to="/settings/providers" replace />
 
@@ -299,12 +303,14 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       : !!key.trim()
 
   // Any edit invalidates a previous test, the config it validated no
-  // longer matches what's on screen.
-  const invalidate = () => {
+  // longer matches what's on screen. A model change keeps the model
+  // list: it belongs to the connection, not to the model picked.
+  const invalidate = (connectionChanged = true) => {
     if (tested) {
       setTested(false)
       setTest(null)
     }
+    if (connectionChanged) setValidated(null)
     setKeyError(null)
   }
 
@@ -405,6 +411,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       }
       setTest(res)
       setTested(res.ok)
+      if (res.ok && res.models) setValidated({ models: res.models, model: res.model })
     } catch (err) {
       setTested(false)
       // Timothy's own bearer failed, App opens the token dialog.
@@ -726,16 +733,17 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             <Field
               label="Model"
               description={
-                isDecider
+                (isDecider
                   ? 'validated with a decide probe, becomes the default'
-                  : 'validated with a one-token completion, becomes the default'
+                  : 'validated with a one-token completion, becomes the default') +
+                (validated && validated.models.length === 0 ? `. ${typedIdHint}` : '')
               }
             >
               <ModelPicker
                 value={model}
                 onChange={(v) => {
                   setModel(v)
-                  invalidate()
+                  invalidate(false)
                 }}
                 suggestions={modelSuggestions}
                 placeholder="model id"
