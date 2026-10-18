@@ -51,6 +51,10 @@ type UserMessage struct {
 	Route     string `json:"route,omitempty"`
 	Agent     string `json:"agent,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
+	// RoutePick is the route an Auto turn settled on after asking the
+	// decider (D-164); the session's next Auto turn reuses it. Empty
+	// on every other turn.
+	RoutePick string `json:"route_pick,omitempty"`
 	// Images are refs to attachments (internal/brain/attachments),
 	// never bytes — base64 exists only transiently at request-build
 	// time (D-045). Additive: a message with no images omits this.
