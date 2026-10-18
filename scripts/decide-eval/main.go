@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
 type MissionSample struct {
@@ -154,13 +156,22 @@ func compare(decideM, classifyM Metric) string {
 	return "DECIDE WORSE"
 }
 
-// gateFailures applies the swap gate: a swapped site's decide accuracy
-// must be nonzero and at least the classifier's; with requireNative,
-// every decide answer must come from a native decision model.
-func gateFailures(agentDecideM, agentClassifyM Metric, requireNative bool, decideMetrics []Metric) []string {
+// swappedSite is a site whose decide path ships, with both paths' tallies.
+type swappedSite struct {
+	Name             string
+	Decide, Classify Metric
+}
+
+// gateFailures applies the swap gate: each swapped site's decide
+// accuracy must be nonzero and at least the classifier's; with
+// requireNative, every decide answer must come from a native decision
+// model.
+func gateFailures(sites []swappedSite, requireNative bool, decideMetrics []Metric) []string {
 	var failed []string
-	if agentDecideM.Total == 0 || agentDecideM.Correct == 0 || agentDecideM.Accuracy() < agentClassifyM.Accuracy() {
-		failed = append(failed, fmt.Sprintf("Accuracy on swapped site Agent Auto-Dispatch: decide %.1f%% < shipping classifier %.1f%%", agentDecideM.Accuracy(), agentClassifyM.Accuracy()))
+	for _, s := range sites {
+		if s.Decide.Total == 0 || s.Decide.Correct == 0 || s.Decide.Accuracy() < s.Classify.Accuracy() {
+			failed = append(failed, fmt.Sprintf("Accuracy on swapped site %s: decide %.1f%% < shipping classifier %.1f%%", s.Name, s.Decide.Accuracy(), s.Classify.Accuracy()))
+		}
 	}
 	if requireNative {
 		native, fallback := 0, 0
@@ -363,6 +374,16 @@ func (r siteResults) decideMetrics() []Metric {
 	return []Metric{r.KindDecide, r.LightDecide, r.AgentDecide, r.KBDecide}
 }
 
+// swapped lists the sites the gate qualifies: the mission preview
+// (D-174) and agent auto-dispatch.
+func (r siteResults) swapped() []swappedSite {
+	return []swappedSite{
+		{"Mission Kind", r.KindDecide, r.KindClassify},
+		{"Mission Light", r.LightDecide, r.LightClassify},
+		{"Agent Auto-Dispatch", r.AgentDecide, r.AgentClassify},
+	}
+}
+
 // runEval runs every site against the gateway behind e.
 func runEval(ctx context.Context, e *Evaluator, ds Dataset) siteResults {
 	var r siteResults
@@ -461,12 +482,12 @@ func main() {
 	fmt.Printf("- Decide answers: %d native, %d llm fallback\n", native, fallback)
 	fmt.Printf("- Provider / Model: %s\n", decideProvider)
 
-	fmt.Println("\n### Live Swap Qualification (Agent Auto-Dispatch):")
-	fmt.Printf("- Agent Auto-Dispatch: decide %s vs shipping classifier %s: %s\n", r.AgentDecide.Report(), r.AgentClassify.Report(), compare(r.AgentDecide, r.AgentClassify))
+	fmt.Println("\n### Live Swap Qualification (Mission Preview, Agent Auto-Dispatch):")
+	for _, s := range r.swapped() {
+		fmt.Printf("- %s: decide %s vs shipping classifier %s: %s\n", s.Name, s.Decide.Report(), s.Classify.Report(), compare(s.Decide, s.Classify))
+	}
 
 	fmt.Println("\n### Unswapped Candidate Benchmark (retained on shipping classifiers):")
-	fmt.Printf("- Mission Kind: decide %s vs shipping classifier %s: %s\n", r.KindDecide.Report(), r.KindClassify.Report(), compare(r.KindDecide, r.KindClassify))
-	fmt.Printf("- Mission Light: decide %s vs shipping classifier %s: %s\n", r.LightDecide.Report(), r.LightClassify.Report(), compare(r.LightDecide, r.LightClassify))
 	fmt.Printf("- KB Collection Filing: decide %s vs shipping classifier %s: %s\n", r.KBDecide.Report(), r.KBClassify.Report(), compare(r.KBDecide, r.KBClassify))
 
 	fmt.Println("\n### Latency & Token Verification:")
@@ -477,7 +498,7 @@ func main() {
 		fmt.Printf("- Target Latency Ceiling: %d ms (note: issue #1245 target applied to POST /v1/missions/classify when bound to decision models)\n", *maxLatencyMS)
 	}
 
-	failed := gateFailures(r.AgentDecide, r.AgentClassify, *requireNative, r.decideMetrics())
+	failed := gateFailures(r.swapped(), *requireNative, r.decideMetrics())
 	fmt.Println("\n### Evaluation Gate Verdict:")
 	if len(failed) > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: Decision model did not meet acceptance criteria:\n")
@@ -505,138 +526,53 @@ func printTableRow(site, mode string, m Metric) {
 // classifierSystem is the shipping classifiers' system line.
 const classifierSystem = "Answer with only what is requested — no prose, no explanation."
 
-const (
-	kindQuestion  = "Classify this mission goal based on its deliverable, not its topic."
-	lightQuestion = "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?"
-)
-
-// kindOptions are the decide options for a mission's kind.
-func kindOptions() []decideOption {
-	return []decideOption{
-		{ID: "coding", Description: "produces or changes code, scripts, or configuration files in a repository"},
-		{ID: "general", Description: "output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)"},
+// evalMissionPreview runs both paths through missions.ClassifyKindAndLight,
+// the preview endpoint's code (D-174): the classify path with no decide,
+// the decide path with no classify. Light is scored on general goals and
+// counts only when kind is right too; the classify path's light rides
+// its kind call, so it books no cost of its own.
+func evalMissionPreview(ctx context.Context, e *Evaluator, samples []MissionSample) (kindDecideM, kindClassifyM, lightDecideM, lightClassifyM Metric) {
+	decideFn := func(ctx context.Context, kind, question, state string, options []gwclient.DecideOption) (string, error) {
+		opts := make([]decideOption, len(options))
+		for i, o := range options {
+			opts[i] = decideOption{ID: o.ID, Description: o.Description}
+		}
+		purpose, m := "kind", &kindDecideM
+		if kind == "yesno" {
+			purpose, m = "light", &lightDecideM
+		}
+		r, err := e.callDecide(ctx, kind, question, state, opts, purpose)
+		m.addDecide(r, err)
+		return r.Choice, err
 	}
-}
-
-// matchKind maps a decide choice to a mission kind, or "" when it is
-// neither option.
-func matchKind(choice string) string {
-	choice = strings.TrimSpace(choice)
-	for _, k := range []string{"coding", "general"} {
-		if strings.EqualFold(choice, k) {
-			return k
-		}
+	classifyFn := func(ctx context.Context, prompt string) (string, error) {
+		reply, tokens, dur, err := e.callStream(ctx, classifierSystem, prompt, "mission_classify")
+		kindClassifyM.Latency += dur
+		kindClassifyM.TotalTokens += tokens
+		return reply, err
 	}
-	return ""
-}
-
-// matchLight maps a yesno decide choice to the light flag; ok is false
-// for anything else.
-func matchLight(choice string) (light, ok bool) {
-	switch strings.ToLower(strings.TrimSpace(choice)) {
-	case "yes":
-		return true, true
-	case "no":
-		return false, true
-	}
-	return false, false
-}
-
-// parseLightReply reads the shipping light classifier's one-word reply.
-func parseLightReply(reply string) bool {
-	lower := strings.ToLower(reply)
-	return strings.Contains(lower, "yes") && !strings.Contains(lower, "no")
-}
-
-// evalMissionPreview evaluates the preview endpoint path (classifyKindAndLightWithDecide vs classifyKindAndLight).
-// The shipping classifier prompt classifies along both axes in one model turn.
-// The decide path calls decide for kind, and for general goals decide for light.
-func evalMissionPreview(ctx context.Context, e *Evaluator, missions []MissionSample) (Metric, Metric, Metric, Metric) {
-	var kindDecideM, kindClassifyM Metric
-	var lightDecideM, lightClassifyM Metric
-
-	kindDecideM.Total = len(missions)
-	kindClassifyM.Total = len(missions)
-
-	for _, m := range missions {
-		promptKind := "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
-			"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
-			"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
-			"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
-			"Goal: " + m.Goal
-		replyKind, tokensKind, durKind, errKind := e.callStream(ctx, classifierSystem, promptKind, "mission_classify")
-		kindClassifyM.Latency += durKind
-		kindClassifyM.TotalTokens += tokensKind
-		if errKind == nil {
-			if gotKind, _ := parseKindAndLight(replyKind); gotKind == m.WantKind {
-				kindClassifyM.Correct++
-			}
-		}
-
-		r, err := e.callDecide(ctx, "choice", kindQuestion, m.Goal, kindOptions(), "kind")
-		kindDecideM.addDecide(r, err)
-		if err == nil && matchKind(r.Choice) == m.WantKind {
-			kindDecideM.Correct++
-		}
-
-		if m.WantKind != "general" {
-			continue
-		}
-		lightDecideM.Total++
-		lightClassifyM.Total++
-
-		promptLight := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts? Answer with exactly one word, yes or no.\n\n" +
-			"Goal: " + m.Goal
-		replyLight, tokensLight, durLight, errLight := e.callStream(ctx, classifierSystem, promptLight, "light")
-		lightClassifyM.Latency += durLight
-		lightClassifyM.TotalTokens += tokensLight
-		if errLight == nil && parseLightReply(replyLight) == m.WantLight {
-			lightClassifyM.Correct++
-		}
-
-		lr, lerr := e.callDecide(ctx, "yesno", lightQuestion, m.Goal, nil, "light")
-		lightDecideM.addDecide(lr, lerr)
-		if lerr == nil {
-			if light, ok := matchLight(lr.Choice); ok && light == m.WantLight {
-				lightDecideM.Correct++
-			}
-		}
+	for _, m := range samples {
+		kind, light := missions.ClassifyKindAndLight(ctx, nil, classifyFn, m.Goal)
+		scoreMission(&kindClassifyM, &lightClassifyM, m, kind, light)
+		kind, light = missions.ClassifyKindAndLight(ctx, decideFn, nil, m.Goal)
+		scoreMission(&kindDecideM, &lightDecideM, m, kind, light)
 	}
 	return kindDecideM, kindClassifyM, lightDecideM, lightClassifyM
 }
 
-func parseKindAndLight(reply string) (kind string, light bool) {
-	fields := strings.Fields(strings.ToLower(reply))
-	kindFound, lightFound := false, false
-	for _, field := range fields {
-		clean := strings.Trim(field, ".,")
-		if !kindFound {
-			switch clean {
-			case "coding":
-				kind = "coding"
-				kindFound = true
-				continue
-			case "general":
-				kind = "general"
-				kindFound = true
-				continue
-			}
-		}
-		if kindFound && !lightFound {
-			switch clean {
-			case "light":
-				light = true
-				lightFound = true
-			case "full":
-				light = false
-				lightFound = true
-			}
-		}
+// scoreMission tallies one preview answer against its sample.
+func scoreMission(kindM, lightM *Metric, m MissionSample, kind string, light bool) {
+	kindM.Total++
+	if kind == m.WantKind {
+		kindM.Correct++
 	}
-	if !kindFound {
-		kind = "general"
+	if m.WantKind != missions.KindGeneral {
+		return
 	}
-	return kind, kind == "general" && light
+	lightM.Total++
+	if kind == m.WantKind && light == m.WantLight {
+		lightM.Correct++
+	}
 }
 
 // candidateAgents turns a sample's candidates into agents for the

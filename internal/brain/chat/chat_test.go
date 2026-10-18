@@ -3789,6 +3789,42 @@ func TestDecideOverGatewayReturnsGatewayError(t *testing.T) {
 	}
 }
 
+// TestMissionDecideOverGateway covers D-174's adapter: an unbound decide
+// role returns ErrDecideUnbound without a gateway call; a bound one
+// sends the request with an empty route and the mission_classify
+// purpose, and a gateway error surfaces as is.
+func TestMissionDecideOverGateway(t *testing.T) {
+	t.Parallel()
+	opts := []gwclient.DecideOption{{ID: "coding", Description: "code"}, {ID: "general", Description: "docs"}}
+
+	unbound := &fakeGW{}
+	if _, err := MissionDecideOverGateway(unbound)(t.Context(), "choice", "q", "goal", opts); !errors.Is(err, missions.ErrDecideUnbound) {
+		t.Fatalf("unbound err = %v, want ErrDecideUnbound", err)
+	}
+	if len(unbound.decideReqs) != 0 {
+		t.Fatalf("unbound role made %d decide calls, want 0", len(unbound.decideReqs))
+	}
+
+	bound := &fakeGW{decideRole: "decider", decideFn: func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+		return gwclient.DecideResponse{Choice: "general"}, nil
+	}}
+	choice, err := MissionDecideOverGateway(bound)(t.Context(), "choice", "q", "goal", opts)
+	if err != nil || choice != "general" {
+		t.Fatalf("bound = %q, %v; want general", choice, err)
+	}
+	req := bound.decideReqs[0]
+	if req.Route != "" || req.Kind != "choice" || req.Question != "q" || req.State != "goal" || req.Purpose != "mission_classify" || !slices.Equal(req.Options, opts) {
+		t.Fatalf("req = %+v", req)
+	}
+
+	failing := &fakeGW{decideRole: "decider", decideFn: func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+		return gwclient.DecideResponse{}, errors.New("chain_exhausted")
+	}}
+	if _, err := MissionDecideOverGateway(failing)(t.Context(), "yesno", "q", "goal", nil); err == nil || errors.Is(err, missions.ErrDecideUnbound) {
+		t.Fatalf("failing err = %v, want the gateway error", err)
+	}
+}
+
 // TestChatAutoDispatchWithDecide confirms that when the decide role is bound,
 // auto-dispatch selects the agent via decision model.
 func TestChatAutoDispatchWithDecide(t *testing.T) {

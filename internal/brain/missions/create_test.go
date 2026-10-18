@@ -3,8 +3,10 @@ package missions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -165,6 +167,166 @@ func TestResolveDefaultsClassifiesOnlyWhenKindEmpty(t *testing.T) {
 	m, _ = ResolveDefaults(context.Background(), CreateRequest{Goal: "g"}, failing)
 	if m.Kind != KindGeneral {
 		t.Fatalf("failing classifier kind = %q, want general", m.Kind)
+	}
+}
+
+// decideCall is one recorded Decide call.
+type decideCall struct {
+	kind, question, state string
+	options               []gwclient.DecideOption
+}
+
+// fakeDecide answers the kind call with kind and the light call with
+// light, recording every call.
+func fakeDecide(calls *[]decideCall, kind string, kindErr error, light string, lightErr error) Decide {
+	return func(_ context.Context, k, q, s string, opts []gwclient.DecideOption) (string, error) {
+		*calls = append(*calls, decideCall{k, q, s, opts})
+		if k == "yesno" {
+			return light, lightErr
+		}
+		return kind, kindErr
+	}
+}
+
+// TestClassifyKindAndLightDecide covers the decide path (D-174): exact
+// option ids only, light asked only for a general goal, and every error
+// or unknown answer biased to general and light false.
+func TestClassifyKindAndLightDecide(t *testing.T) {
+	t.Parallel()
+	down := errors.New("decide down")
+	tests := []struct {
+		name      string
+		kind      string
+		kindErr   error
+		light     string
+		lightErr  error
+		wantKind  string
+		wantLight bool
+		wantCalls int
+	}{
+		{"coding skips light", "coding", nil, "yes", nil, KindCoding, false, 1},
+		{"general and light", "general", nil, "yes", nil, KindGeneral, true, 2},
+		{"general and full", "general", nil, "no", nil, KindGeneral, false, 2},
+		{"light error is full", "general", nil, "", down, KindGeneral, false, 2},
+		{"light answer is exact", "general", nil, "Yes", nil, KindGeneral, false, 2},
+		{"kind error is general", "", down, "yes", nil, KindGeneral, false, 1},
+		{"kind answer is exact", "Coding", nil, "yes", nil, KindGeneral, false, 1},
+		{"echoed label is no match", "coding: produces or changes code", nil, "yes", nil, KindGeneral, false, 1},
+		{"empty answer is general", "", nil, "yes", nil, KindGeneral, false, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var calls []decideCall
+			classified := false
+			classify := func(context.Context, string) (string, error) { classified = true; return "coding full", nil }
+			kind, light := ClassifyKindAndLight(context.Background(), fakeDecide(&calls, tc.kind, tc.kindErr, tc.light, tc.lightErr), classify, "the goal")
+			if kind != tc.wantKind || light != tc.wantLight {
+				t.Fatalf("ClassifyKindAndLight = (%q, %v), want (%q, %v)", kind, light, tc.wantKind, tc.wantLight)
+			}
+			if len(calls) != tc.wantCalls {
+				t.Fatalf("decide calls = %d, want %d", len(calls), tc.wantCalls)
+			}
+			if classified {
+				t.Fatal("classify ran while the decide role is bound")
+			}
+		})
+	}
+}
+
+// TestClassifyKindAndLightDecideShape pins the question shapes: kind is
+// a choice over described coding and general options, light a yesno
+// with no options, both with the goal as state.
+func TestClassifyKindAndLightDecideShape(t *testing.T) {
+	t.Parallel()
+	var calls []decideCall
+	ClassifyKindAndLight(context.Background(), fakeDecide(&calls, "general", nil, "no", nil), nil, "write a summary")
+	if len(calls) != 2 {
+		t.Fatalf("decide calls = %d, want 2", len(calls))
+	}
+	kc, lc := calls[0], calls[1]
+	if kc.kind != "choice" || kc.question != KindQuestion || kc.state != "write a summary" {
+		t.Fatalf("kind call = %+v", kc)
+	}
+	if len(kc.options) != 2 || kc.options[0].ID != KindCoding || kc.options[1].ID != KindGeneral {
+		t.Fatalf("kind options = %+v, want coding then general", kc.options)
+	}
+	for _, o := range kc.options {
+		if o.Description == "" {
+			t.Fatalf("kind option %q has no description", o.ID)
+		}
+	}
+	if lc.kind != "yesno" || lc.question != LightQuestion || lc.state != "write a summary" || lc.options != nil {
+		t.Fatalf("light call = %+v", lc)
+	}
+}
+
+// todayClassifyPrompt is the classify prompt the preview sent before
+// the decide path existed; the unbound path must send it unchanged.
+const todayClassifyPrompt = "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
+	"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
+	"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
+	"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
+	"Goal: the goal"
+
+// TestClassifyKindAndLightUnbound covers the fallback: a nil decide or
+// ErrDecideUnbound (wrapped too) sends today's classify prompt and
+// parses its reply, with no further decide call.
+func TestClassifyKindAndLightUnbound(t *testing.T) {
+	t.Parallel()
+	unbound := func(_ context.Context, _, _, _ string, _ []gwclient.DecideOption) (string, error) {
+		return "", fmt.Errorf("lookup: %w", ErrDecideUnbound)
+	}
+	for name, decide := range map[string]Decide{"nil": nil, "unbound": unbound} {
+		var prompts []string
+		classify := func(_ context.Context, p string) (string, error) {
+			prompts = append(prompts, p)
+			return "general light", nil
+		}
+		kind, light := ClassifyKindAndLight(context.Background(), decide, classify, "the goal")
+		if kind != KindGeneral || !light {
+			t.Fatalf("%s: ClassifyKindAndLight = (%q, %v), want (general, true)", name, kind, light)
+		}
+		if len(prompts) != 1 || prompts[0] != todayClassifyPrompt {
+			t.Fatalf("%s: classify prompts = %q, want today's prompt once", name, prompts)
+		}
+		if got := ClassifyKind(context.Background(), decide, classify, "the goal"); got != kind {
+			t.Fatalf("%s: ClassifyKind = %q, preview kind %q", name, got, kind)
+		}
+	}
+}
+
+// TestClassifyKindMatchesPreview checks create and preview agree on the
+// decide path, and create never asks light.
+func TestClassifyKindMatchesPreview(t *testing.T) {
+	t.Parallel()
+	for _, answer := range []string{"coding", "general", "other"} {
+		var previewCalls, createCalls []decideCall
+		kind, _ := ClassifyKindAndLight(context.Background(), fakeDecide(&previewCalls, answer, nil, "yes", nil), nil, "g")
+		got := ClassifyKind(context.Background(), fakeDecide(&createCalls, answer, nil, "yes", nil), nil, "g")
+		if got != kind {
+			t.Fatalf("answer %q: ClassifyKind = %q, preview %q", answer, got, kind)
+		}
+		if len(createCalls) != 1 || !reflect.DeepEqual(createCalls[0], previewCalls[0]) {
+			t.Fatalf("answer %q: create calls %+v, want the preview's kind call only", answer, createCalls)
+		}
+	}
+}
+
+func TestResolveDefaultsDecidesKind(t *testing.T) {
+	t.Parallel()
+	var calls []decideCall
+	classified := false
+	deps := ResolveDeps{
+		Decide:   fakeDecide(&calls, "coding", nil, "", nil),
+		Classify: func(context.Context, string) (string, error) { classified = true; return "general", nil },
+	}
+	m, err := ResolveDefaults(context.Background(), CreateRequest{Goal: "add a flag"}, deps)
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if m.Kind != KindCoding || len(calls) != 1 || classified {
+		t.Fatalf("kind %q, decide calls %d, classified %v; want coding from one decide call", m.Kind, len(calls), classified)
 	}
 }
 

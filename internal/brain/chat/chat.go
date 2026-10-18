@@ -25,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -585,6 +586,30 @@ func DecideOverGateway(gw Gateway) agents.Decide {
 			State:    state,
 			Options:  opts,
 			Purpose:  "decide",
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Choice, nil
+	}
+}
+
+// MissionDecideOverGateway builds the missions.Decide behind a mission's
+// kind and light (D-174). An unbound decide role, or a failed role
+// lookup, returns missions.ErrDecideUnbound so the caller keeps its
+// classify path. Route stays empty so a bound decide route with no
+// entries falls back to the summarize role at the gateway (D-163).
+func MissionDecideOverGateway(gw Gateway) missions.Decide {
+	return func(ctx context.Context, kind, question, state string, options []gwclient.DecideOption) (string, error) {
+		if _, ok, err := gw.RouteForRole(ctx, "decide"); err != nil || !ok {
+			return "", missions.ErrDecideUnbound
+		}
+		resp, err := gw.Decide(ctx, gwclient.DecideRequest{
+			Kind:     kind,
+			Question: question,
+			State:    state,
+			Options:  options,
+			Purpose:  "mission_classify",
 		})
 		if err != nil {
 			return "", err
