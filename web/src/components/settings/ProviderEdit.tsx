@@ -75,6 +75,10 @@ function baselineFrom(provider: AdminProvider): StagedProvider {
   }
 }
 
+function trimSlash(u: string): string {
+  return u.trim().replace(/\/+$/, '')
+}
+
 // buildPatch builds the single PATCH body from the staged values and
 // the provider's own current options. It starts from the provider's
 // full options map (so a key this form never shows, like
@@ -229,6 +233,19 @@ function ProviderEditForm({
     provider.driver !== 'anthropic' &&
     provider.driver !== 'bedrock' &&
     (preset?.id === 'custom' || Boolean(staged.values.litellm_provider))
+  const showBaseURL = !isCli && !isBedrock && !isCliproxy && Boolean(provider.base_url)
+  const showAdvanced = (isOpenaicompat && !isCliproxy) || showLitellmProvider || showBaseURL
+  // The fold opens by itself when any field in it holds a non-default
+  // value at load, so a set value is never hidden.
+  const [advancedOpen, setAdvancedOpen] = useState(() => {
+    const b = baselineFrom(initialProvider)
+    return (
+      b.reasoningDisabled ||
+      b.request_timeout !== '' ||
+      b.litellm_provider !== '' ||
+      (showBaseURL && trimSlash(initialProvider.base_url) !== trimSlash(preset.baseURL))
+    )
+  })
 
   return (
     <PageShell width="form">
@@ -292,33 +309,6 @@ function ProviderEditForm({
             </Field>
           )}
 
-          {isOpenaicompat && !isCliproxy && (
-            <Field label="Disable reasoning" required={false}>
-              {() => (
-                <div className="flex items-center gap-3 text-sm">
-                  <Switch
-                    checked={staged.values.reasoningDisabled}
-                    onCheckedChange={(v) => staged.setField('reasoningDisabled', v)}
-                    aria-label="Disable reasoning"
-                  />
-                  <span className="text-muted-foreground">
-                    Disable reasoning ("thinking") for every request to this provider.
-                  </span>
-                </div>
-              )}
-            </Field>
-          )}
-
-          {isOpenaicompat && !isCliproxy && (
-            <OptionStringField
-              label="Request timeout"
-              description='Go duration, e.g. "20m", empty uses the default.'
-              value={staged.values.request_timeout}
-              onChange={(v) => staged.setField('request_timeout', v)}
-              placeholder="5m"
-            />
-          )}
-
           {isBedrock && (
             <Field label="AWS region">
               {(props) => (
@@ -336,17 +326,6 @@ function ProviderEditForm({
                 </Select>
               )}
             </Field>
-          )}
-
-          {showLitellmProvider && (
-            <OptionStringField
-              label="LiteLLM provider"
-              description="Which LiteLLM provider section this provider's models are priced under. Empty infers it from driver/base URL."
-              value={staged.values.litellm_provider}
-              onChange={(v) => staged.setField('litellm_provider', v)}
-              placeholder="e.g. xai, zai"
-              mono
-            />
           )}
 
           {isCli ? (
@@ -372,6 +351,63 @@ function ProviderEditForm({
                 placeholder="model id"
               />
             </Field>
+          )}
+
+          {showAdvanced && (
+            <details className="group" open={advancedOpen} onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}>
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
+                Advanced
+              </summary>
+              <div className="mt-3 space-y-5">
+                {isOpenaicompat && !isCliproxy && (
+                  <Field label="Disable reasoning" required={false}>
+                    {() => (
+                      <div className="flex items-center gap-3 text-sm">
+                        <Switch
+                          checked={staged.values.reasoningDisabled}
+                          onCheckedChange={(v) => staged.setField('reasoningDisabled', v)}
+                          aria-label="Disable reasoning"
+                        />
+                        <span className="text-muted-foreground">
+                          Disable reasoning ("thinking") for every request to this provider.
+                        </span>
+                      </div>
+                    )}
+                  </Field>
+                )}
+
+                {isOpenaicompat && !isCliproxy && (
+                  <OptionStringField
+                    label="Request timeout"
+                    description='Go duration, e.g. "20m", empty uses the default.'
+                    value={staged.values.request_timeout}
+                    onChange={(v) => staged.setField('request_timeout', v)}
+                    placeholder="5m"
+                  />
+                )}
+
+                {showLitellmProvider && (
+                  <OptionStringField
+                    label="LiteLLM provider"
+                    description="Which LiteLLM provider section this provider's models are priced under. Empty infers it from driver/base URL."
+                    value={staged.values.litellm_provider}
+                    onChange={(v) => staged.setField('litellm_provider', v)}
+                    placeholder="e.g. xai, zai"
+                    mono
+                  />
+                )}
+
+                {showBaseURL && (
+                  <Field
+                    label="Base URL"
+                    description="Set when the provider was added. To point at a different address, add the provider again."
+                    required={false}
+                  >
+                    {(props) => <Input {...props} value={provider.base_url} readOnly className="font-mono" />}
+                  </Field>
+                )}
+              </div>
+            </details>
           )}
         </FieldGroup>
 
