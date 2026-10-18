@@ -2,12 +2,14 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/router"
 )
 
 // Model list sources (D-172).
@@ -16,9 +18,17 @@ const (
 	modelSourceCatalog = "catalog"
 )
 
+// Price sources (D-173), in the order router.Snapshot.Prices resolves
+// them: prices_by_model, the provider's own listing, the catalog.
+const (
+	priceSourceOperator = "operator"
+	priceSourceCatalog  = "catalog"
+	priceSourceListing  = "listing"
+)
+
 // ListedModel is one row of a provider's model list. Prices are per
-// million tokens and, like the context window, null when no exact
-// catalog match exists (D-013).
+// million tokens and, like the context window, null when no source
+// states them (D-013); PriceSource names the source, empty when none.
 type ListedModel struct {
 	ID             string   `json:"id"`
 	DisplayName    string   `json:"display_name,omitempty"`
@@ -26,6 +36,7 @@ type ListedModel struct {
 	InputPerMTok   *float64 `json:"input_per_mtok"`
 	OutputPerMTok  *float64 `json:"output_per_mtok"`
 	MaxInputTokens *int64   `json:"max_input_tokens"`
+	PriceSource    string   `json:"price_source,omitempty"`
 }
 
 // modelFetch calls a provider's own listing endpoint.
@@ -111,20 +122,42 @@ func (a *Admin) modelList(ctx context.Context, p Provider, fetch modelFetch) ([]
 	if err != nil {
 		return nil, fmt.Errorf("admin model list: %w", err)
 	}
+	operator := operatorPrices(p.Options)
 	if fetch == nil {
-		return catalogModelList(pool), nil
+		return catalogModelList(pool, operator), nil
 	}
 	live, err := fetch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return liveModelList(cliproxyVendorModels(p, live), pool), nil
+	return liveModelList(cliproxyVendorModels(p, live), pool, operator, p.Options["listing_prices"] != "off"), nil
+}
+
+// operatorPrices decodes options.prices_by_model; a value that does not
+// decode (rejected at write time anyway) contributes nothing.
+func operatorPrices(opts map[string]string) map[string]router.ModelPrices {
+	var prices map[string]router.ModelPrices
+	if raw := opts["prices_by_model"]; raw != "" {
+		_ = json.Unmarshal([]byte(raw), &prices)
+	}
+	return prices
+}
+
+// applyOperatorPrice overrides row's price with prices_by_model's when
+// the operator declared one for its id.
+func applyOperatorPrice(row *ListedModel, operator map[string]router.ModelPrices) {
+	if p, ok := operator[row.ID]; ok {
+		row.InputPerMTok, row.OutputPerMTok, row.PriceSource = &p.InputPerMTok, &p.OutputPerMTok, priceSourceOperator
+	}
 }
 
 // liveModelList joins live ids with their exact catalog match in pool.
 // A match with a known non chat-like mode drops the id; an unmatched id
-// or a match without a mode stays.
-func liveModelList(live []provider.AvailableModel, pool []catalog.Model) []ListedModel {
+// or a match without a mode stays. Prices resolve in router.Snapshot.Prices
+// order (D-173): prices_by_model, the listing's own price (when listing
+// is on and it states both input and output), then the catalog. The
+// catalog also fills a context window the listing leaves empty.
+func liveModelList(live []provider.AvailableModel, pool []catalog.Model, operator map[string]router.ModelPrices, listing bool) []ListedModel {
 	byKey := make(map[string]catalog.Model, len(pool))
 	for _, m := range pool {
 		if _, ok := byKey[m.ModelKey]; !ok {
@@ -133,21 +166,31 @@ func liveModelList(live []provider.AvailableModel, pool []catalog.Model) []Liste
 	}
 	out := make([]ListedModel, 0, len(live))
 	for _, m := range live {
-		row := ListedModel{ID: m.ID, DisplayName: m.DisplayName, Source: modelSourceLive}
+		row := ListedModel{ID: m.ID, DisplayName: m.DisplayName, Source: modelSourceLive, MaxInputTokens: m.ContextLength}
+		if listing && m.InputPerMTok != nil && m.OutputPerMTok != nil {
+			row.InputPerMTok, row.OutputPerMTok, row.PriceSource = m.InputPerMTok, m.OutputPerMTok, priceSourceListing
+		}
 		if key := catalog.Match(m.ID, pool); key != "" {
 			cm := byKey[key]
 			if cm.Mode != "" && !catalog.ChatLike(cm.Mode) {
 				continue
 			}
-			row.InputPerMTok, row.OutputPerMTok, row.MaxInputTokens = cm.InputPerMTok, cm.OutputPerMTok, cm.MaxInputTokens
+			if row.PriceSource == "" && (cm.InputPerMTok != nil || cm.OutputPerMTok != nil) {
+				row.InputPerMTok, row.OutputPerMTok, row.PriceSource = cm.InputPerMTok, cm.OutputPerMTok, priceSourceCatalog
+			}
+			if row.MaxInputTokens == nil {
+				row.MaxInputTokens = cm.MaxInputTokens
+			}
 		}
+		applyOperatorPrice(&row, operator)
 		out = append(out, row)
 	}
 	return out
 }
 
-// catalogModelList is pool's chat-like rows, first row per id.
-func catalogModelList(pool []catalog.Model) []ListedModel {
+// catalogModelList is pool's chat-like rows, first row per id, with
+// prices_by_model winning over the catalog's price.
+func catalogModelList(pool []catalog.Model, operator map[string]router.ModelPrices) []ListedModel {
 	out := make([]ListedModel, 0, len(pool))
 	seen := make(map[string]bool, len(pool))
 	for _, m := range pool {
@@ -155,13 +198,18 @@ func catalogModelList(pool []catalog.Model) []ListedModel {
 			continue
 		}
 		seen[m.ID] = true
-		out = append(out, ListedModel{
+		row := ListedModel{
 			ID:             m.ID,
 			Source:         modelSourceCatalog,
 			InputPerMTok:   m.InputPerMTok,
 			OutputPerMTok:  m.OutputPerMTok,
 			MaxInputTokens: m.MaxInputTokens,
-		})
+		}
+		if m.InputPerMTok != nil || m.OutputPerMTok != nil {
+			row.PriceSource = priceSourceCatalog
+		}
+		applyOperatorPrice(&row, operator)
+		out = append(out, row)
 	}
 	return out
 }
