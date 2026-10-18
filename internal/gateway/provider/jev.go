@@ -79,7 +79,6 @@ type jevResponse struct {
 		Type          string             `json:"type"`
 		Choice        string             `json:"choice"`
 		Noul          *float64           `json:"noul"`
-		Score         *float64           `json:"score"`
 		Probabilities map[string]float64 `json:"probabilities"`
 	} `json:"answers"`
 	Usage struct {
@@ -161,7 +160,7 @@ func (j *Jev) Decide(ctx context.Context, model string, req DecideRequest) (Deci
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("jev: choice %q is not an allowed option", ans.Choice)
-	case DecideYesNo:
+	default: // DecideYesNo
 		if ans.Noul != nil {
 			p := *ans.Noul
 			if p < 0 || p > 1 {
@@ -181,27 +180,6 @@ func (j *Jev) Decide(ctx context.Context, model string, req DecideRequest) (Deci
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("jev: reply carries no noul probability")
-	default: // DecideScore
-		levels := scoreCriteria(req)
-		maxIdx := float64(len(levels) - 1)
-		if maxIdx <= 0 {
-			maxIdx = 1.0
-		}
-
-		if ans.Score != nil {
-			raw := *ans.Score
-			if raw < 0 || raw > maxIdx {
-				return DecideResult{}, usage, fmt.Errorf("jev: score %v is outside [0, %g]", raw, maxIdx)
-			}
-			norm := raw / maxIdx
-			if norm < 0 {
-				norm = 0
-			} else if norm > 1 {
-				norm = 1
-			}
-			return DecideResult{Score: &norm, Scores: ans.Probabilities}, usage, nil
-		}
-		return DecideResult{}, usage, fmt.Errorf("jev: reply carries no score")
 	}
 }
 
@@ -219,9 +197,6 @@ func jevBody(model string, req DecideRequest) jevRequest {
 			}
 		}
 		q.Criteria = crit
-	case DecideScore:
-		q.Type = "score"
-		q.Criteria = scoreCriteria(req)
 	default: // DecideYesNo
 		q.Type = "noul"
 	}

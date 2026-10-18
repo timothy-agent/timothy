@@ -16,15 +16,6 @@ import (
 // DefaultLayaModel is the default English typed-decisions checkpoint (D-163).
 const DefaultLayaModel = "typed-decisions"
 
-// defaultScoreLevels provides a standard ordinal scale for score questions when
-// the request does not provide explicit level descriptions.
-var defaultScoreLevels = []string{
-	"none: not at all present or relevant",
-	"low: minor or slight presence",
-	"medium: moderate or noticeable presence",
-	"high: strong or critical presence",
-}
-
 // LayaConfig configures one Laya decision-model provider instance.
 type LayaConfig struct {
 	Name    string
@@ -83,7 +74,6 @@ type layaResponse struct {
 		Type          string             `json:"type"`
 		Choice        string             `json:"choice"`
 		Noul          *float64           `json:"noul"`
-		Score         *float64           `json:"score"`
 		Probabilities map[string]float64 `json:"probabilities"`
 	} `json:"answers"`
 	Usage struct {
@@ -105,13 +95,6 @@ func (l *Laya) healthEndpoint() string {
 	endpoint = strings.TrimSuffix(endpoint, "/v1/systemone")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	return endpoint + "/health"
-}
-
-func scoreCriteria(req DecideRequest) []string {
-	if len(req.Options) >= 2 {
-		return req.Options
-	}
-	return defaultScoreLevels
 }
 
 // Decide evaluates a DecideRequest via Laya's /v1/systemone endpoint.
@@ -176,7 +159,7 @@ func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (Dec
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("laya: choice %q is not an allowed option", ans.Choice)
-	case DecideYesNo:
+	default: // DecideYesNo
 		if ans.Noul != nil {
 			p := *ans.Noul
 			if p < 0 || p > 1 {
@@ -196,27 +179,6 @@ func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (Dec
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no noul probability")
-	default: // DecideScore
-		levels := scoreCriteria(req)
-		maxIdx := float64(len(levels) - 1)
-		if maxIdx <= 0 {
-			maxIdx = 1.0
-		}
-
-		if ans.Score != nil {
-			raw := *ans.Score
-			if raw < 0 || raw > maxIdx {
-				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, %g]", raw, maxIdx)
-			}
-			norm := raw / maxIdx
-			if norm < 0 {
-				norm = 0
-			} else if norm > 1 {
-				norm = 1
-			}
-			return DecideResult{Score: &norm, Scores: ans.Probabilities}, usage, nil
-		}
-		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no score")
 	}
 }
 
@@ -234,9 +196,6 @@ func layaBody(model string, req DecideRequest) layaRequest {
 			}
 		}
 		q.Criteria = crit
-	case DecideScore:
-		q.Type = "score"
-		q.Criteria = scoreCriteria(req)
 	default: // DecideYesNo
 		q.Type = "noul"
 	}

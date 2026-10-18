@@ -45,12 +45,4 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	if err != nil || (res.Choice != "yes" && res.Choice != "no") {
 		t.Fatalf("yesno res = %+v err = %v", res, err)
 	}
-
-	res, _, err = l.Decide(t.Context(), "typed-decisions", DecideRequest{
-		Kind:     DecideScore,
-		Question: "The user is asking about the weather.",
-	})
-	if err != nil || res.Score == nil || *res.Score < 0 || *res.Score > 1 {
-		t.Fatalf("score res = %+v err = %v", res, err)
-	}
 }

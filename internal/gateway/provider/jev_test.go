@@ -2,7 +2,6 @@ package provider
 
 import (
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,74 +169,6 @@ func TestJevDecideYesNo(t *testing.T) {
 				t.Fatalf("res = %+v", res)
 			}
 		})
-	}
-}
-
-func TestJevDecideScore(t *testing.T) {
-	t.Parallel()
-
-	t.Run("default criteria 4 levels", func(t *testing.T) {
-		t.Parallel()
-		stub := newJevStub(t, `{"type":"score","score":1.5,"probabilities":{"0":0.1,"1":0.3,"2":0.4,"3":0.2}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		res, usage, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "How relevant is this document?"})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.5) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.5", res.Score)
-		}
-		if res.Choice != "" {
-			t.Fatalf("res.Choice = %q, want empty", res.Choice)
-		}
-		if usage == nil || usage.InputTokens != 83 {
-			t.Fatalf("usage = %+v", usage)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 4 {
-			t.Fatalf("criteria = %v, want 4 levels", q.Criteria)
-		}
-	})
-
-	t.Run("custom 3 levels 0 to 2 scale", func(t *testing.T) {
-		t.Parallel()
-		stub := newJevStub(t, `{"type":"score","score":1.84,"probabilities":{"0":0.05,"1":0.11,"2":0.84}}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		res, _, err := j.Decide(t.Context(), "", DecideRequest{
-			Kind:     DecideScore,
-			Question: "How urgent is this incident?",
-			Options:  []string{"not urgent", "soon", "blocking"},
-		})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if res.Score == nil || math.Abs(*res.Score-0.92) > 1e-4 {
-			t.Fatalf("res.Score = %v, want 0.92", res.Score)
-		}
-		q := stub.got.Questions["q"]
-		if q.Type != "score" {
-			t.Fatalf("q.Type = %q, want score", q.Type)
-		}
-		crit, ok := q.Criteria.([]any)
-		if !ok || len(crit) != 3 {
-			t.Fatalf("criteria = %v, want 3 levels", q.Criteria)
-		}
-	})
-}
-
-func TestJevDecideScoreOutsideRangeIsAnError(t *testing.T) {
-	t.Parallel()
-	for _, badScore := range []string{"-0.1", "3.5"} {
-		stub := newJevStub(t, `{"type":"score","score":`+badScore+`}`)
-		j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
-		_, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
-		if err == nil || !strings.Contains(err.Error(), "outside [0, 3]") {
-			t.Fatalf("score %s: err = %v, want 'outside [0, 3]'", badScore, err)
-		}
 	}
 }
 
