@@ -45,8 +45,7 @@ func TestValidate(t *testing.T) {
 		{"choice needs two distinct ids", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{{ID: "a", Description: "x"}, {ID: "A", Description: "y"}}}, "at least two", nil},
 		{"yesno gets the fixed pair", provider.DecideRequest{Kind: "yesno", Question: "q"}, "", ids("yes", "no")},
 		{"yesno rejects options", provider.DecideRequest{Kind: "yesno", Question: "q", Options: ids("yes")}, "takes no options", nil},
-		{"score has no options", provider.DecideRequest{Kind: "score", Question: "q"}, "", nil},
-		{"score rejects options", provider.DecideRequest{Kind: "score", Question: "q", Options: ids("a", "b")}, "takes no options", nil},
+		{"score is an unknown kind", provider.DecideRequest{Kind: "score", Question: "q"}, `unknown kind "score"`, nil},
 		{"unknown kind", provider.DecideRequest{Kind: "rank", Question: "q"}, `unknown kind "rank"`, nil},
 		{"empty question", provider.DecideRequest{Kind: "yesno", Question: "  "}, "question is required", nil},
 	}
@@ -83,38 +82,31 @@ func TestParse(t *testing.T) {
 		{ID: "OpenAI:GPT-5-mini", Description: "cheap: fast"},
 	}}
 	yesno := provider.DecideRequest{Kind: "yesno", Options: ids("yes", "no")}
-	score := provider.DecideRequest{Kind: "score"}
 	tests := []struct {
 		name       string
 		req        provider.DecideRequest
 		text       string
 		wantChoice string
-		wantScore  float64
 		malformed  bool
 	}{
-		{"exact option", choice, "research", "research", 0, false},
-		{"case and whitespace", choice, "  Coding\n", "coding", 0, false},
-		{"quoted with period", choice, `"general".`, "general", 0, false},
-		{"markdown bold", choice, "**research**", "research", 0, false},
-		{"prose around the option is malformed", choice, "I think research fits best", "", 0, true},
-		{"two options is malformed", choice, "coding, research", "", 0, true},
-		{"described option matches on id", described, "coding", "coding", 0, false},
-		{"reply echoing the prompt line returns id", described, "Coding: writes code", "coding", 0, false},
-		{"description alone is malformed", described, "writes code", "", 0, true},
-		{"id with trailing colon is malformed", described, "coding:", "", 0, true},
-		{"colon id round-trips", colon, "openai:gpt-5", "openai:gpt-5", 0, false},
-		{"colon id is not cut to its prefix", colon, "openai", "openai", 0, false},
-		{"colon id case-insensitive returns id as given", colon, "openai:gpt-5-MINI", "OpenAI:GPT-5-mini", 0, false},
-		{"colon id quoted with period", colon, "`openai:gpt-5`.", "openai:gpt-5", 0, false},
-		{"colon id echoing the prompt line", colon, "OpenAI:GPT-5-mini: cheap: fast", "OpenAI:GPT-5-mini", 0, false},
-		{"unknown colon id is malformed", colon, "openai:gpt-4", "", 0, true},
-		{"yes", yesno, "Yes", "yes", 0, false},
-		{"maybe is malformed", yesno, "maybe", "", 0, true},
-		{"score", score, "0.75", "", 0.75, false},
-		{"score bounds", score, "1.0", "", 1, false},
-		{"score above one is malformed", score, "1.5", "", 0, true},
-		{"score percent is malformed", score, "75%", "", 0, true},
-		{"score prose is malformed", score, "about 0.5", "", 0, true},
+		{"exact option", choice, "research", "research", false},
+		{"case and whitespace", choice, "  Coding\n", "coding", false},
+		{"quoted with period", choice, `"general".`, "general", false},
+		{"markdown bold", choice, "**research**", "research", false},
+		{"prose around the option is malformed", choice, "I think research fits best", "", true},
+		{"two options is malformed", choice, "coding, research", "", true},
+		{"described option matches on id", described, "coding", "coding", false},
+		{"reply echoing the prompt line returns id", described, "Coding: writes code", "coding", false},
+		{"description alone is malformed", described, "writes code", "", true},
+		{"id with trailing colon is malformed", described, "coding:", "", true},
+		{"colon id round-trips", colon, "openai:gpt-5", "openai:gpt-5", false},
+		{"colon id is not cut to its prefix", colon, "openai", "openai", false},
+		{"colon id case-insensitive returns id as given", colon, "openai:gpt-5-MINI", "OpenAI:GPT-5-mini", false},
+		{"colon id quoted with period", colon, "`openai:gpt-5`.", "openai:gpt-5", false},
+		{"colon id echoing the prompt line", colon, "OpenAI:GPT-5-mini: cheap: fast", "OpenAI:GPT-5-mini", false},
+		{"unknown colon id is malformed", colon, "openai:gpt-4", "", true},
+		{"yes", yesno, "Yes", "yes", false},
+		{"maybe is malformed", yesno, "maybe", "", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,7 +116,7 @@ func TestParse(t *testing.T) {
 				if !errors.Is(err, ErrMalformed) {
 					t.Fatalf("err = %v, want ErrMalformed", err)
 				}
-				if res.Choice != "" || res.Score != nil {
+				if res.Choice != "" {
 					t.Fatalf("malformed reply produced a result %+v", res)
 				}
 				return
@@ -134,9 +126,6 @@ func TestParse(t *testing.T) {
 			}
 			if res.Choice != tc.wantChoice {
 				t.Fatalf("choice = %q, want %q", res.Choice, tc.wantChoice)
-			}
-			if tc.req.Kind == "score" && (res.Score == nil || *res.Score != tc.wantScore) {
-				t.Fatalf("score = %v, want %v", res.Score, tc.wantScore)
 			}
 		})
 	}
@@ -163,10 +152,6 @@ func TestPromptListsOptions(t *testing.T) {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user prompt %q lacks %q", user, want)
 		}
-	}
-	system, user = Prompt(provider.DecideRequest{Kind: "score", Question: "How relevant?"})
-	if !strings.Contains(system, "between 0 and 1") || strings.Contains(user, "Allowed options") {
-		t.Fatalf("score prompt = %q / %q", system, user)
 	}
 }
 

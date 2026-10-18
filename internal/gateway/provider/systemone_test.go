@@ -67,7 +67,7 @@ func TestSystemOnePresetsSendIdenticalBodies(t *testing.T) {
 		mu.Lock()
 		bodies = append(bodies, b)
 		mu.Unlock()
-		_, _ = w.Write([]byte(`{"answers":{"q":{"type":"choice","choice":"a","noul":0.7,"score":1}},"usage":{"input_tokens":1}}`))
+		_, _ = w.Write([]byte(`{"answers":{"q":{"type":"choice","choice":"a","noul":0.7}},"usage":{"input_tokens":1}}`))
 	}))
 	defer srv.Close()
 
@@ -77,8 +77,6 @@ func TestSystemOnePresetsSendIdenticalBodies(t *testing.T) {
 	}{
 		{"choice", DecideRequest{Kind: DecideChoice, Question: "Pick one.", State: "some state", Options: []DecideOption{{ID: "a", Description: "first"}, {ID: "b"}}}},
 		{"yesno", DecideRequest{Kind: DecideYesNo, Question: "Is it?", Options: optIDs("yes", "no")}},
-		{"score default levels", DecideRequest{Kind: DecideScore, Question: "How much?"}},
-		{"score custom levels", DecideRequest{Kind: DecideScore, Question: "How much?", Options: optIDs("low", "mid", "high")}},
 	} {
 		mu.Lock()
 		bodies = nil

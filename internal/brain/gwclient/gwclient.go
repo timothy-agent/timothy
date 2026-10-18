@@ -634,7 +634,7 @@ func (c *Client) CreateProvider(ctx context.Context, p AdminProvider) (string, e
 // DecideRequest mirrors the gateway's POST /v1/decide request contract (D-163).
 type DecideRequest struct {
 	Route     string         `json:"route,omitempty"`
-	Kind      string         `json:"kind"` // "choice" | "yesno" | "score"
+	Kind      string         `json:"kind"` // "choice" | "yesno"
 	Question  string         `json:"question"`
 	State     string         `json:"state,omitempty"`
 	Options   []DecideOption `json:"options,omitempty"`
@@ -652,7 +652,6 @@ type DecideOption struct {
 // DecideResponse is the typed answer from POST /v1/decide.
 type DecideResponse struct {
 	Choice   string             `json:"choice,omitempty"`
-	Score    *float64           `json:"score,omitempty"`
 	Scores   map[string]float64 `json:"scores,omitempty"`
 	Provider string             `json:"provider"`
 	Model    string             `json:"model"`
@@ -666,7 +665,7 @@ func (r DecideResponse) YesNo() bool {
 	return r.Choice == "yes"
 }
 
-// Decide answers one fixed-choice, yes/no, or score question on a decide route.
+// Decide answers one fixed-choice or yes/no question on a decide route.
 // Route is optional: empty resolves the decide role on the gateway side.
 func (c *Client) Decide(ctx context.Context, req DecideRequest) (DecideResponse, error) {
 	body, err := json.Marshal(req)
