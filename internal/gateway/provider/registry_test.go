@@ -96,31 +96,6 @@ func TestBuildPassesReasoningEffortToOpenAICompat(t *testing.T) {
 	}
 }
 
-func TestBuildOpenAIResponses(t *testing.T) {
-	t.Parallel()
-	r, err := Build([]Config{
-		{Name: "oai-responses", Kind: KindAPI, Driver: "openai-responses",
-			BaseURL: "https://api.openai.com/v1", ReasoningEffort: "low"},
-	}, func(string) string { return "" })
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	p, ok := r.Get("oai-responses")
-	if !ok {
-		t.Fatal("oai-responses missing")
-	}
-	ors, ok := p.(*OpenAIResponses)
-	if !ok {
-		t.Fatalf("provider type = %T, want *OpenAIResponses", p)
-	}
-	if ors.cfg.ReasoningEffort != "low" {
-		t.Fatalf("ReasoningEffort = %q, want low", ors.cfg.ReasoningEffort)
-	}
-	if p.Kind() != KindAPI {
-		t.Fatalf("Kind = %v", p.Kind())
-	}
-}
-
 func TestBuildErrors(t *testing.T) {
 	t.Parallel()
 	noLookup := func(string) string { return "" }
@@ -148,9 +123,9 @@ func TestBuildErrors(t *testing.T) {
 			wantErr: "requires base_url",
 		},
 		{
-			name:    "openai-responses without base url",
-			cfgs:    []Config{{Name: "p", Driver: "openai-responses"}},
-			wantErr: "requires base_url",
+			name:    "legacy openai-responses driver",
+			cfgs:    []Config{{Name: "p", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1"}},
+			wantErr: "unknown driver",
 		},
 		{
 			name:    "empty name",
@@ -283,7 +258,6 @@ func TestBuildForwardsHeadersToRequests(t *testing.T) {
 	}{
 		{driver: "anthropic"},
 		{driver: "openaicompat"},
-		{driver: "openai-responses"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.driver, func(t *testing.T) {

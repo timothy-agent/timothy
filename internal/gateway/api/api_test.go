@@ -146,8 +146,8 @@ func (p midStreamCutProvider) Stream(context.Context, provider.CompletionRequest
 }
 
 // providerStateDoneProvider streams one chunk then a done event
-// carrying Meta.ProviderState — standing in for the openai-responses
-// driver's continuation state (D-067), to pin that streamAttempt/
+// carrying Meta.ProviderState, standing in for the Responses API
+// continuation state (D-067), to pin that streamAttempt/
 // handleStream preserve it rather than overwriting Meta wholesale.
 type providerStateDoneProvider struct {
 	name  string
@@ -727,56 +727,6 @@ func TestStreamAttemptPreservesProviderState(t *testing.T) {
 	}
 	if sent[1].Meta == nil || string(sent[1].Meta.ProviderState) != string(state) {
 		t.Fatalf("done Meta.ProviderState = %+v, want %s", sent[1].Meta, state)
-	}
-}
-
-// TestStreamProviderStatePassthrough pins D-067 end to end through
-// handleStream: streamRequest.provider_state reaches the openai-
-// responses driver's CompletionRequest.ProviderState (previous_response_id
-// on the wire), and the driver's own done Meta.ProviderState (the new
-// response id) rides back out on the SSE done event.
-func TestStreamProviderStatePassthrough(t *testing.T) {
-	t.Parallel()
-	incoming := `{"driver":"openai-responses","previous_response_id":"resp_old"}`
-
-	var gotPreviousID string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var wire struct {
-			PreviousResponseID string `json:"previous_response_id"`
-		}
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &wire)
-		gotPreviousID = wire.PreviousResponseID
-		_, _ = fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"delta\":\"ok\"}\n\n")
-		_, _ = fmt.Fprint(w, "event: response.completed\ndata: {\"response\":{\"id\":\"resp_new\",\"status\":\"completed\"}}\n\n")
-	}))
-	t.Cleanup(srv.Close)
-
-	rows := []router.ProviderRow{
-		{ID: "p1", Name: "one", Kind: "api", Driver: "openai-responses", BaseURL: srv.URL,
-			DefaultModel: "m1", Enabled: true},
-	}
-	routes := []router.RouteRow{
-		{Name: "coding", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
-	}
-	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, nil)
-
-	a, _ := newAPI(snap)
-	body := fmt.Sprintf(`{"route":"coding","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"prior"}],"provider_state":%s}`, incoming)
-	w := postJSON(t, a.handleStream, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
-	}
-	if gotPreviousID != "resp_old" {
-		t.Fatalf("wire previous_response_id = %q, want resp_old", gotPreviousID)
-	}
-	events := sseEvents(t, w.Body.String())
-	done := events[len(events)-1]
-	if done.Type != stream.EventDone || done.Meta == nil || len(done.Meta.ProviderState) == 0 {
-		t.Fatalf("done event = %+v, want Meta.ProviderState set", done)
-	}
-	if !strings.Contains(string(done.Meta.ProviderState), "resp_new") {
-		t.Fatalf("done Meta.ProviderState = %s, want it to carry resp_new", done.Meta.ProviderState)
 	}
 }
 
