@@ -3749,7 +3749,7 @@ func TestDecideOverGatewayLeavesRouteToGateway(t *testing.T) {
 				},
 			}
 			decide := DecideOverGateway(gw)
-			choice, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"})
+			choice, err := decide(t.Context(), "choice", "which one?", "some-state", []agents.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}})
 			if err != nil {
 				t.Fatalf("decide: %v", err)
 			}
@@ -3768,6 +3768,10 @@ func TestDecideOverGatewayLeavesRouteToGateway(t *testing.T) {
 			if req.Kind != "choice" || req.State != "some-state" || req.Purpose != "decide" {
 				t.Fatalf("req = %+v, want kind=choice, state=some-state, purpose=decide", req)
 			}
+			wantOpts := []gwclient.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}}
+			if !slices.Equal(req.Options, wantOpts) {
+				t.Fatalf("options = %+v, want %+v", req.Options, wantOpts)
+			}
 		})
 	}
 }
@@ -3780,7 +3784,7 @@ func TestDecideOverGatewayReturnsGatewayError(t *testing.T) {
 		return gwclient.DecideResponse{}, errors.New("chain_exhausted")
 	}}
 	decide := DecideOverGateway(gw)
-	if _, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"}); err == nil {
+	if _, err := decide(t.Context(), "choice", "which one?", "some-state", []agents.DecideOption{{ID: "option-a", Description: "first: one"}, {ID: "option-b"}}); err == nil {
 		t.Fatal("decide: want error when the gateway fails")
 	}
 }
@@ -3885,8 +3889,9 @@ func TestChatAutoRouteIntentPicksDescribedRoute(t *testing.T) {
 	if firstDecide.Purpose != "route_intent" {
 		t.Fatalf("decide purpose = %q, want route_intent", firstDecide.Purpose)
 	}
-	if len(firstDecide.Options) != 2 || firstDecide.Options[0] != "default" || firstDecide.Options[1] != "coding: Software engineering and coding" {
-		t.Fatalf("decide options = %+v, want [default, coding: Software engineering and coding]", firstDecide.Options)
+	wantOpts := []gwclient.DecideOption{{ID: "default"}, {ID: "coding", Description: "Software engineering and coding"}}
+	if !slices.Equal(firstDecide.Options, wantOpts) {
+		t.Fatalf("decide options = %+v, want %+v", firstDecide.Options, wantOpts)
 	}
 }
 

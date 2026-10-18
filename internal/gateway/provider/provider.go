@@ -53,7 +53,23 @@ type DecideRequest struct {
 	State    string
 	// Options is the closed answer set for a choice (already yes/no
 	// for a yesno).
-	Options []string
+	Options []DecideOption
+}
+
+// DecideOption is one allowed answer: the reply names ID, Description
+// tells the model what ID stands for.
+type DecideOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+}
+
+// Label renders the option as "id: description" for a model to read,
+// or the bare id when there is no description. It is never parsed.
+func (o DecideOption) Label() string {
+	if o.Description == "" {
+		return o.ID
+	}
+	return o.ID + ": " + o.Description
 }
 
 // DecideResult is a typed answer. Scores carries per-option

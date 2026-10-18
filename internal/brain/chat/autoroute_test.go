@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,56 @@ func TestChatAutoRouteIntentDeadlineFallsBack(t *testing.T) {
 	}
 	if req := gw.lastChatRequest(); req.Route != "default" {
 		t.Fatalf("req.Route = %q, want default after decide timeout", req.Route)
+	}
+}
+
+// TestResolveAutoRouteTypedOptions confirms the intent pick sends each
+// candidate as a typed option and matches the reply on the exact
+// route name, so a name with a colon is never cut.
+func TestResolveAutoRouteTypedOptions(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, choice, want string
+	}{
+		{"colon name round-trips", "team:coding", "team:coding"},
+		{"prefix of a colon name is its own route", "team", "team"},
+		{"name and description is no match", "team:coding: Software engineering", "default"},
+		{"case differs is no match", "Team:Coding", "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gw := &fakeGW{
+				decideRole: "decide-llm",
+				candidates: []gwclient.RouteCandidate{
+					{Name: "default"},
+					{Name: "team", Description: "Team chat"},
+					{Name: "team:coding", Description: "Software engineering"},
+				},
+				decideFn: func(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+					return gwclient.DecideResponse{Choice: tc.choice}, nil
+				},
+				resolveFn: func(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+					return &gwclient.ResolvedRoute{Route: name, Entries: []gwclient.ResolvedRouteEntry{{Model: "m", Usable: true}}}, nil
+				},
+			}
+			s := newService(gw, newFakeLog())
+			if got := s.resolveAutoRoute(t.Context(), "s1", nil, "fix this bug"); got != tc.want {
+				t.Fatalf("resolveAutoRoute = %q, want %q", got, tc.want)
+			}
+			gw.mu.Lock()
+			defer gw.mu.Unlock()
+			if len(gw.decideReqs) != 1 {
+				t.Fatalf("decide calls = %d, want 1", len(gw.decideReqs))
+			}
+			want := []gwclient.DecideOption{
+				{ID: "default"},
+				{ID: "team", Description: "Team chat"},
+				{ID: "team:coding", Description: "Software engineering"},
+			}
+			if got := gw.decideReqs[0].Options; !slices.Equal(got, want) {
+				t.Fatalf("options = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 

@@ -16,16 +16,17 @@ import (
 )
 
 // decideRequest is the POST /v1/decide body (D-163). Route is
-// optional: empty resolves the decide role.
+// optional: empty resolves the decide role. Options are typed
+// {id, description} objects; a bare string option fails to decode.
 type decideRequest struct {
-	Route     string   `json:"route,omitempty"`
-	Kind      string   `json:"kind"`
-	Question  string   `json:"question"`
-	State     string   `json:"state,omitempty"`
-	Options   []string `json:"options,omitempty"`
-	Purpose   string   `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
-	SessionID string   `json:"session_id,omitempty"`
-	MissionID string   `json:"mission_id,omitempty"`
+	Route     string                  `json:"route,omitempty"`
+	Kind      string                  `json:"kind"`
+	Question  string                  `json:"question"`
+	State     string                  `json:"state,omitempty"`
+	Options   []provider.DecideOption `json:"options,omitempty"`
+	Purpose   string                  `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
+	SessionID string                  `json:"session_id,omitempty"`
+	MissionID string                  `json:"mission_id,omitempty"`
 }
 
 // decideResponse is the typed answer plus the entry that served it.
