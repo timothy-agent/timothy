@@ -59,6 +59,7 @@ import type {
   UnpricedGroup,
   UsagePoint,
   UsageSummary,
+  ValidateResult,
 } from './types'
 
 const tokenKey = 'timothy.token'
@@ -778,12 +779,13 @@ export async function testProvider(id: string, model?: string): Promise<TestResu
 
 // validateProvider probes an UNSAVED provider config with a one-token
 // completion: the add dialog's validate-on-create. Probe failures come
-// back as { ok: false, detail }; only invalid configs throw.
+// back as { ok: false, detail }; only invalid configs throw. A passing
+// probe also carries the config's model list (D-172).
 export async function validateProvider(
   p: Partial<AdminProvider>,
   model: string,
-): Promise<TestResult> {
-  return request<TestResult>('/v1/admin/providers/validate', {
+): Promise<ValidateResult> {
+  return request<ValidateResult>('/v1/admin/providers/validate', {
     method: 'POST',
     body: JSON.stringify({ ...p, model }),
   })
@@ -830,8 +832,8 @@ export async function searchCatalog(
 // catalogModelsForProvider searches the synced catalog restricted to a
 // provider's candidate litellm_provider(s) (derived server-side from
 // its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
-//: the model id picker's live suggestion source, and the provider
-// detail page's read-only Models list. q filters case-insensitive
+//, for price lookups. Model pickers read availableModels instead
+// (D-172). q filters case-insensitive
 // substring on model_key; omitted fetches the provider's whole
 // candidate pool. limit defaults to the server's normal cap (50);
 // pass the server's max (200) for a page that wants the whole pool.
