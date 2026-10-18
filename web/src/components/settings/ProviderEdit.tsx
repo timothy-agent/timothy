@@ -1,5 +1,5 @@
 import { CircleAlert, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -15,6 +15,7 @@ import {
   testProvider,
 } from '../../api/client'
 import type { AdminProvider, AvailableModel } from '../../api/types'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
@@ -30,6 +31,17 @@ import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
 import { ExistingCredentialSelect } from './CredentialRefPicker'
 import { ModelPicker, type ModelSuggestion, priceLabel } from './ModelPicker'
 import { listedSuggestions, type ModelList, typedIdHint, useModelList } from './modelList'
+import {
+  type OperatorPrice,
+  type OperatorPrices,
+  optionsWithPrices,
+  parseOperatorPrices,
+  parsePrice,
+  unpricedListed,
+  withListedFree,
+  withoutPrice,
+  withPrice,
+} from './modelPrices'
 import { OptionStringField } from './OptionStringField'
 import { bedrockRegions, matchPreset } from '../../lib/providerPresets'
 import { ProviderLogo } from '../timothy/provider-logo'
@@ -176,7 +188,8 @@ function ProviderEditForm({
 
   const staged = useStagedForm<StagedProvider>(baselineFrom(initialProvider))
   const test = useProviderTestState()
-  const modelList = useModelList(provider.id)
+  const modelList = useModelList(provider.id, provider.options?.prices_by_model)
+  const operatorPrices = useMemo(() => parseOperatorPrices(provider.options?.prices_by_model), [provider.options?.prices_by_model])
   const modelSuggestions = useMemo(
     () => listedSuggestions(modelList.models, provider.default_model),
     [modelList.models, provider.default_model],
@@ -203,6 +216,16 @@ function ProviderEditForm({
       setSaving(false)
     }
   }, [provider, doRefresh, staged])
+
+  // savePrices writes prices_by_model on its own PATCH and leaves the
+  // staged form alone; a later form Save carries the new value.
+  const savePrices = useCallback(
+    async (next: OperatorPrices) => {
+      await patchProvider(provider.id, { options: optionsWithPrices(provider, next) })
+      await doRefresh()
+    },
+    [provider, doRefresh],
+  )
 
   const remove = async () => {
     try {
@@ -494,7 +517,7 @@ function ProviderEditForm({
 
       {!isCli && (
         <div className="mt-10">
-          <ProviderModelsPanel list={modelList} />
+          <ProviderModelsPanel list={modelList} prices={operatorPrices} savePrices={savePrices} />
         </div>
       )}
 
@@ -869,23 +892,78 @@ function CliModelField({
   )
 }
 
-// ProviderModelsPanel is a read-only, filterable table of the
-// provider's model list (D-172): live ids with catalog prices, or the
-// catalog fallback. Model *selection* for actual use lives on the
-// Routes page.
-function ProviderModelsPanel({ list }: { list: ModelList }) {
+// ProviderModelsPanel is a filterable table of the provider's model
+// list (D-172): live ids with their prices, or the catalog fallback.
+// Each row names its price source and takes an operator price, written
+// to options.prices_by_model (D-173). Model *selection* for actual use
+// lives on the Routes page.
+function ProviderModelsPanel({
+  list,
+  prices,
+  savePrices,
+}: {
+  list: ModelList
+  prices: OperatorPrices
+  savePrices: (next: OperatorPrices) => Promise<void>
+}) {
   const [q, setQ] = useState('')
+  // editing is the model id whose price editor is open; '' is the
+  // add-price editor for a typed id.
+  const [editing, setEditing] = useState<string | null>(null)
+  const [confirmFree, setConfirmFree] = useState(false)
+  const [markingFree, setMarkingFree] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
   const { models, error } = list
   const live = models[0]?.source === 'live'
+  // Operator prices for ids the list does not carry still get a row, so
+  // they can be seen and cleared.
+  const rows = useMemo(() => {
+    const listed = new Set(models.map((m) => m.id))
+    const extra: AvailableModel[] = Object.entries(prices)
+      .filter(([id]) => !listed.has(id))
+      .map(([id, p]) => ({ id, input_per_mtok: p.input_per_mtok, output_per_mtok: p.output_per_mtok, price_source: 'operator' }))
+    return [...models, ...extra]
+  }, [models, prices])
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    if (!needle) return models
-    return models.filter(
+    if (!needle) return rows
+    return rows.filter(
       (m) => m.id.toLowerCase().includes(needle) || m.display_name?.toLowerCase().includes(needle),
     )
-  }, [models, q])
+  }, [rows, q])
+  const unpriced = unpricedListed(prices, models)
+  const unpricedText = `${unpriced.length} listed ${unpriced.length === 1 ? 'model' : 'models'}`
 
   const title = models.length === 0 ? 'Models' : live ? 'Models your key can use' : 'Models from catalog'
+
+  const markFree = async () => {
+    setMarkingFree(true)
+    try {
+      await savePrices(withListedFree(prices, models))
+      setNote(`Marked ${unpricedText} free.`)
+      setConfirmFree(false)
+    } catch (err) {
+      toast.error('Could not mark models free', { description: errText(err) })
+    } finally {
+      setMarkingFree(false)
+    }
+  }
+
+  const editor = (model: string) => (
+    <PriceEditor
+      model={model}
+      price={prices[model]}
+      onCancel={() => setEditing(null)}
+      onSave={async (id, input, output) => {
+        await savePrices(withPrice(prices, id, input, output))
+        setEditing(null)
+      }}
+      onClear={async () => {
+        await savePrices(withoutPrice(prices, model))
+        setEditing(null)
+      }}
+    />
+  )
 
   return (
     <Panel
@@ -897,36 +975,80 @@ function ProviderModelsPanel({ list }: { list: ModelList }) {
       }
       density="operational"
     >
-      <div className="p-3">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter by model id…" size="sm" />
+      <div className="flex flex-wrap items-center gap-2 p-3">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="filter by model id…"
+          size="sm"
+          className="min-w-40 flex-1"
+        />
+        <Button type="button" size="sm" variant="outline" onClick={() => setEditing('')}>
+          Add price
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={unpriced.length === 0}
+          onClick={() => setConfirmFree(true)}
+        >
+          Mark listed models free
+        </Button>
       </div>
+      {note && <p className="px-3 pb-3 text-sm text-muted-foreground">{note}</p>}
+      {editing === '' && <div className="border-t border-border p-3">{editor('')}</div>}
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>Model</TableHead>
             <TableHead>Context</TableHead>
             <TableHead className="text-right">Price</TableHead>
+            <TableHead className="w-0" />
           </TableRow>
         </TableHeader>
         <TableBody>
           {filtered.map((m) => (
-            <TableRow key={m.id}>
-              <TableCell className="font-mono">{m.id}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {m.max_input_tokens != null ? `${Math.round(m.max_input_tokens / 1000)}k ctx` : ''}
-              </TableCell>
-              <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                {priceLabel({
-                  id: m.id,
-                  input_per_mtok: m.input_per_mtok ?? undefined,
-                  output_per_mtok: m.output_per_mtok ?? undefined,
-                })}
-              </TableCell>
-            </TableRow>
+            <Fragment key={m.id}>
+              <TableRow>
+                <TableCell className="font-mono">{m.id}</TableCell>
+                <TableCell className="text-muted-foreground">
+                  {m.max_input_tokens != null ? `${Math.round(m.max_input_tokens / 1000)}k ctx` : ''}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                  <span>
+                    {priceLabel({
+                      id: m.id,
+                      input_per_mtok: m.input_per_mtok ?? undefined,
+                      output_per_mtok: m.output_per_mtok ?? undefined,
+                    })}
+                  </span>{' '}
+                  <Badge variant={m.price_source === 'operator' ? 'brand' : 'neutral'} size="sm">
+                    {m.price_source ?? 'unknown'}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Edit price for ${m.id}`}
+                    onClick={() => setEditing(m.id)}
+                  >
+                    Edit
+                  </Button>
+                </TableCell>
+              </TableRow>
+              {editing === m.id && (
+                <TableRow>
+                  <TableCell colSpan={4}>{editor(m.id)}</TableCell>
+                </TableRow>
+              )}
+            </Fragment>
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={3} className="text-muted-foreground">
+              <TableCell colSpan={4} className="text-muted-foreground">
                 {!list.loaded ? 'loading models…' : error ? `Could not list models: ${error}` : 'no models found'}
                 {q === '' && <span className="block">{typedIdHint}</span>}
               </TableCell>
@@ -934,6 +1056,119 @@ function ProviderModelsPanel({ list }: { list: ModelList }) {
           )}
         </TableBody>
       </Table>
+      <ConfirmDialog
+        open={confirmFree}
+        onOpenChange={setConfirmFree}
+        title="Mark listed models free?"
+        description={`Sets a price of $0 for the ${unpricedText} without an operator price. Use this for a provider you pay a flat fee for. Clear a model's price to undo it.`}
+        confirmLabel="Mark free"
+        loading={markingFree}
+        onConfirm={() => void markFree()}
+      />
     </Panel>
+  )
+}
+
+// PriceEditor edits one operator price, USD per million tokens. model
+// '' asks for the model id too. Field and save errors show inline.
+function PriceEditor({
+  model,
+  price,
+  onSave,
+  onClear,
+  onCancel,
+}: {
+  model: string
+  price?: OperatorPrice
+  onSave: (model: string, input: number, output: number) => Promise<void>
+  onClear: () => Promise<void>
+  onCancel: () => void
+}) {
+  const [id, setId] = useState(model)
+  const [input, setInput] = useState(price?.input_per_mtok != null ? String(price.input_per_mtok) : '')
+  const [output, setOutput] = useState(price?.output_per_mtok != null ? String(price.output_per_mtok) : '')
+  const [errors, setErrors] = useState<{ id?: string; input?: string; output?: string; save?: string }>({})
+  const [busy, setBusy] = useState(false)
+
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true)
+    try {
+      await action()
+    } catch (err) {
+      setErrors({ save: errText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const save = () => {
+    const inP = parsePrice(input)
+    const outP = parsePrice(output)
+    const next = {
+      id: id.trim() === '' ? 'Enter a model id.' : undefined,
+      input: 'error' in inP ? inP.error : undefined,
+      output: 'error' in outP ? outP.error : undefined,
+    }
+    setErrors(next)
+    if (next.id || 'error' in inP || 'error' in outP) return
+    void run(() => onSave(id.trim(), inP.value, outP.value))
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-start gap-2">
+        {model === '' && (
+          <PriceField label="Model id" value={id} onChange={setId} error={errors.id} placeholder="model id" mono />
+        )}
+        <PriceField label="Input $ / MTok" value={input} onChange={setInput} error={errors.input} placeholder="0.50" />
+        <PriceField label="Output $ / MTok" value={output} onChange={setOutput} error={errors.output} placeholder="1.50" />
+      </div>
+      {errors.save && <p className="text-sm text-destructive">Could not save price: {errors.save}</p>}
+      <div className="flex gap-2">
+        <Button type="button" size="sm" disabled={busy} onClick={save}>
+          Save price
+        </Button>
+        {price && (
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void run(onClear)}>
+            Clear price
+          </Button>
+        )}
+        <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function PriceField({
+  label,
+  value,
+  onChange,
+  error,
+  placeholder,
+  mono,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  error?: string
+  placeholder: string
+  mono?: boolean
+}) {
+  return (
+    <label className="flex min-w-32 flex-col gap-1 text-xs text-muted-foreground">
+      {label}
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        size="sm"
+        inputMode={mono ? undefined : 'decimal'}
+        aria-invalid={error != null || undefined}
+        className={mono ? 'font-mono' : undefined}
+      />
+      {error && <span className="text-destructive">{error}</span>}
+    </label>
   )
 }
