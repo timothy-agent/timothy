@@ -15,7 +15,7 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	if base == "" {
 		t.Skip("LAYA_URL not set; skipping laya live test")
 	}
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: base})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: base})
 
 	models, err := l.ListModels(t.Context())
 	if err != nil || len(models) == 0 {

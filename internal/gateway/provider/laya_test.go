@@ -12,7 +12,7 @@ import (
 // records the last request body and headers.
 type layaStub struct {
 	srv    *httptest.Server
-	got    layaRequest
+	got    systemoneRequest
 	auth   string
 	answer string
 	status int
@@ -44,7 +44,7 @@ func newLayaStub(t *testing.T, answer string) *layaStub {
 
 func TestLayaCapabilitiesAndStream(t *testing.T) {
 	t.Parallel()
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: "http://laya:8000"})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: "http://laya:8000"})
 	if caps := l.Capabilities(); len(caps) != 1 || caps[0] != CapDecide {
 		t.Fatalf("capabilities = %v, want decide only", caps)
 	}
@@ -60,7 +60,7 @@ func TestLayaCapabilitiesAndStream(t *testing.T) {
 func TestLayaDecideChoice(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL, APIKey: "k"})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL, APIKey: "k"})
 
 	res, usage, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
@@ -98,7 +98,7 @@ func TestLayaDecideChoice(t *testing.T) {
 func TestLayaDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 
 	res, _, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
@@ -128,7 +128,7 @@ func TestLayaDecideChoiceWithStateAndDescriptions(t *testing.T) {
 func TestLayaDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"other","probabilities":{"other":1}}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 	_, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"a", "b"}})
 	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("err = %v, want 'not an allowed option'", err)
@@ -153,7 +153,7 @@ func TestLayaDecideYesNo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := newLayaStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
-			l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+			l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
@@ -172,7 +172,7 @@ func TestLayaDecideYesNo(t *testing.T) {
 func TestLayaDecideMissingAnswerIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"a"}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 	if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil || !strings.Contains(err.Error(), "no noul probability") {
 		t.Fatalf("err = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestLayaBaseURLNormalization(t *testing.T) {
 	defer srv.Close()
 
 	for _, u := range []string{srv.URL, srv.URL + "/v1", srv.URL + "/v1/systemone"} {
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: u})
+		l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: u})
 		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"coding", "research"}})
 		if err != nil {
 			t.Fatalf("Decide with BaseURL %q: %v", u, err)
@@ -205,7 +205,7 @@ func TestLayaDecideHTTPErrorsSurface(t *testing.T) {
 	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusServiceUnavailable} {
 		stub := newLayaStub(t, `{}`)
 		stub.status = status
-		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+		l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 		if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil {
 			t.Fatalf("status %d: no error", status)
 		}
@@ -215,7 +215,7 @@ func TestLayaDecideHTTPErrorsSurface(t *testing.T) {
 func TestLayaListModels(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{}`)
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	l := NewLaya(SystemOneConfig{Name: "laya", BaseURL: stub.srv.URL})
 	models, err := l.ListModels(t.Context())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
