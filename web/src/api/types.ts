@@ -551,6 +551,9 @@ export interface AdminProvider {
     auth?: string
     anthropic_base_url?: string
     litellm_provider?: string
+    // prices_by_model is a JSON object of model id to prices (USD per
+    // million tokens), encoded as a string.
+    prices_by_model?: string
   }
 }
 

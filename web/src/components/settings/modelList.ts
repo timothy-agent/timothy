@@ -15,8 +15,8 @@ const emptyModelList: ModelList = { models: [], loaded: false, error: null }
 
 // useModelList fetches a provider's one model list (D-172), the source
 // every model picker reads. An empty id fetches nothing; a failed fetch
-// is an empty list with its error.
-export function useModelList(providerId: string): ModelList {
+// is an empty list with its error. A change of refreshKey fetches again.
+export function useModelList(providerId: string, refreshKey?: string): ModelList {
   const [state, setState] = useState<ModelList & { id: string }>({ ...emptyModelList, id: '' })
   useEffect(() => {
     if (!providerId) return
@@ -32,7 +32,7 @@ export function useModelList(providerId: string): ModelList {
     return () => {
       cancelled = true
     }
-  }, [providerId])
+  }, [providerId, refreshKey])
   return state.id === providerId ? state : emptyModelList
 }
 
