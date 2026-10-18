@@ -47,7 +47,7 @@ func decodeDecide(t *testing.T, body []byte) decideResponse {
 	return out
 }
 
-const choiceBody = `{"kind":"choice","question":"Which kind?","options":["coding","research"]}`
+const choiceBody = `{"kind":"choice","question":"Which kind?","options":[{"id":"coding"},{"id":"research"}]}`
 
 // TestDecideChoiceOverSummarizeFallback: no decide route at all, so
 // the summarize role's chain answers through the llm fallback. The
@@ -130,7 +130,7 @@ func TestDecideRoleRoutePreferred(t *testing.T) {
 		t.Fatalf("entry route = %q, want decide", e.Route)
 	}
 
-	w = postJSON(t, a.handleDecide, `{"route":"summarize","kind":"choice","question":"Which kind?","options":["coding","research"]}`)
+	w = postJSON(t, a.handleDecide, `{"route":"summarize","kind":"choice","question":"Which kind?","options":[{"id":"coding"},{"id":"research"}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("explicit route code = %d body=%s", w.Code, w.Body.String())
 	}
@@ -244,7 +244,7 @@ func (d *nativeDecider) Stream(context.Context, provider.CompletionRequest) (<-c
 }
 func (d *nativeDecider) Decide(_ context.Context, model string, req provider.DecideRequest) (provider.DecideResult, *stream.Usage, error) {
 	d.got = req
-	return provider.DecideResult{Choice: req.Options[0], Scores: map[string]float64{req.Options[0]: 0.9, req.Options[1]: 0.1}},
+	return provider.DecideResult{Choice: req.Options[0].ID, Scores: map[string]float64{req.Options[0].ID: 0.9, req.Options[1].ID: 0.1}},
 		&stream.Usage{InputTokens: 3}, nil
 }
 
@@ -255,7 +255,7 @@ func (d *nativeDecider) Decide(_ context.Context, model string, req provider.Dec
 func TestDecideAttemptNativeDriver(t *testing.T) {
 	t.Parallel()
 	native := &nativeDecider{}
-	req := provider.DecideRequest{Kind: "yesno", Question: "Is it done?", Options: []string{"yes", "no"}}
+	req := provider.DecideRequest{Kind: "yesno", Question: "Is it done?", Options: []provider.DecideOption{{ID: "yes"}, {ID: "no"}}}
 
 	res, usage, effort, err := decideAttempt(t.Context(), router.Attempt{Provider: native, ProviderName: "laya", Model: "laya-1"}, req, true)
 	if err != nil {
@@ -267,8 +267,8 @@ func TestDecideAttemptNativeDriver(t *testing.T) {
 	if usage == nil || usage.InputTokens != 3 {
 		t.Fatalf("usage = %+v", usage)
 	}
-	if strings.Join(native.got.Options, ",") != "yes,no" {
-		t.Fatalf("driver got options %v", native.got.Options)
+	if len(native.got.Options) != 2 || native.got.Options[0].ID != "yes" || native.got.Options[1].ID != "no" {
+		t.Fatalf("driver got options %+v", native.got.Options)
 	}
 
 	snap := decideSnapshot(t, oaiOK(t, "yes").URL, oaiFail(t).URL, nil)
@@ -279,6 +279,33 @@ func TestDecideAttemptNativeDriver(t *testing.T) {
 	res, _, effort, err = decideAttempt(t.Context(), attempts[0], req, false)
 	if err != nil || res.Choice != "yes" || effort != "low" {
 		t.Fatalf("fallback res = %+v effort = %q err = %v", res, effort, err)
+	}
+}
+
+// TestDecideTypedOptionsColonID: typed options whose ids carry colons
+// come back from the llm fallback as the exact id, never cut at a colon.
+func TestDecideTypedOptionsColonID(t *testing.T) {
+	t.Parallel()
+	const body = `{"kind":"choice","question":"Which route?","options":[` +
+		`{"id":"openai","description":"any OpenAI model"},` +
+		`{"id":"openai:gpt-5","description":"flagship: slow"},` +
+		`{"id":"local:qwen3:4b"}]}`
+	for _, tc := range []struct {
+		reply, want string
+	}{
+		{"openai:gpt-5", "openai:gpt-5"},
+		{"LOCAL:QWEN3:4B", "local:qwen3:4b"},
+		{"openai", "openai"},
+		{"openai:gpt-5: flagship: slow", "openai:gpt-5"},
+	} {
+		a, _ := newAPI(decideSnapshot(t, oaiOK(t, tc.reply).URL, oaiFail(t).URL, nil))
+		w := postJSON(t, a.handleDecide, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("reply %q: code = %d body=%s", tc.reply, w.Code, w.Body.String())
+		}
+		if out := decodeDecide(t, w.Body.Bytes()); out.Choice != tc.want {
+			t.Fatalf("reply %q: choice = %q, want %q", tc.reply, out.Choice, tc.want)
+		}
 	}
 }
 
@@ -301,9 +328,13 @@ func TestDecideValidation(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(decideSnapshot(t, oaiOK(t, "coding").URL, oaiFail(t).URL, nil))
 	for _, body := range []string{
-		`{"kind":"choice","question":"q","options":["one"]}`,
-		`{"kind":"yesno","question":"q","options":["yes","no"]}`,
-		`{"kind":"score","question":"q","options":["a","b"]}`,
+		`{"kind":"choice","question":"q","options":[{"id":"one"}]}`,
+		`{"kind":"choice","question":"q","options":[{"id":"a","description":"x"},{"id":"A","description":"y"}]}`,
+		`{"kind":"choice","question":"q","options":[{"description":"no id"},{"id":"b"}]}`,
+		`{"kind":"choice","question":"q","options":["coding","research"]}`,
+		`{"kind":"choice","question":"q","options":["coding: writes code","research: finds sources"]}`,
+		`{"kind":"yesno","question":"q","options":[{"id":"yes"},{"id":"no"}]}`,
+		`{"kind":"score","question":"q","options":[{"id":"a"},{"id":"b"}]}`,
 		`{"kind":"rank","question":"q"}`,
 		`{"kind":"yesno"}`,
 		`not json`,

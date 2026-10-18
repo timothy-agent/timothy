@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -426,7 +427,10 @@ func TestInvalidateRoutesDropsMemoizedRouting(t *testing.T) {
 
 func TestDecideSuccess(t *testing.T) {
 	t.Parallel()
-	var gotReq DecideRequest
+	var (
+		gotReq  DecideRequest
+		gotBody []byte
+	)
 	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/decide" {
 			http.NotFound(w, r)
@@ -436,7 +440,8 @@ func TestDecideSuccess(t *testing.T) {
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+		gotBody, _ = io.ReadAll(r.Body)
+		if err := json.Unmarshal(gotBody, &gotReq); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -447,7 +452,7 @@ func TestDecideSuccess(t *testing.T) {
 	res, err := c.Decide(t.Context(), DecideRequest{
 		Kind:     "choice",
 		Question: "fix the bug",
-		Options:  []string{"coding", "general"},
+		Options:  []DecideOption{{ID: "coding", Description: "writes code"}, {ID: "team:general"}},
 		Purpose:  "test_decide",
 	})
 	if err != nil {
@@ -455,6 +460,9 @@ func TestDecideSuccess(t *testing.T) {
 	}
 	if gotReq.Kind != "choice" || gotReq.Question != "fix the bug" || len(gotReq.Options) != 2 {
 		t.Fatalf("gotReq = %+v, unexpected request payload", gotReq)
+	}
+	if !strings.Contains(string(gotBody), `"options":[{"id":"coding","description":"writes code"},{"id":"team:general"}]`) {
+		t.Fatalf("body = %s, want typed options on the wire", gotBody)
 	}
 	if res.Choice != "coding" || res.Provider != "laya-svc" || res.Model != "typed-decisions" || res.LedgerID != "ledg-1" {
 		t.Fatalf("res = %+v, unexpected response", res)

@@ -25,7 +25,7 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	res, usage, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which department should handle this request?",
-		Options:  []string{"billing", "technical", "sales"},
+		Options:  optIDs("billing", "technical", "sales"),
 	})
 	if err != nil {
 		t.Fatalf("choice: %v", err)
@@ -40,7 +40,7 @@ func TestLayaLiveRoundTrip(t *testing.T) {
 	res, _, err = l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideYesNo,
 		Question: "Does the user explicitly request a refund?",
-		Options:  []string{"yes", "no"},
+		Options:  optIDs("yes", "no"),
 	})
 	if err != nil || (res.Choice != "yes" && res.Choice != "no") {
 		t.Fatalf("yesno res = %+v err = %v", res, err)

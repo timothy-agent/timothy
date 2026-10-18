@@ -128,7 +128,11 @@ func (s *SystemOne) setHeaders(req *http.Request) {
 
 func scoreCriteria(req DecideRequest) []string {
 	if len(req.Options) >= 2 {
-		return req.Options
+		levels := make([]string, len(req.Options))
+		for i, o := range req.Options {
+			levels[i] = o.Label()
+		}
+		return levels
 	}
 	return defaultScoreLevels
 }
@@ -185,12 +189,8 @@ func (s *SystemOne) Decide(ctx context.Context, model string, req DecideRequest)
 	switch req.Kind {
 	case DecideChoice:
 		for _, o := range req.Options {
-			id := o
-			if cutID, _, ok := strings.Cut(o, ": "); ok {
-				id = cutID
-			}
-			if strings.EqualFold(ans.Choice, id) || strings.EqualFold(ans.Choice, o) {
-				return DecideResult{Choice: id, Scores: ans.Probabilities}, usage, nil
+			if strings.EqualFold(ans.Choice, o.ID) {
+				return DecideResult{Choice: o.ID, Scores: ans.Probabilities}, usage, nil
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("%s: choice %q is not an allowed option", name, ans.Choice)
@@ -245,10 +245,10 @@ func systemoneBody(model string, req DecideRequest) systemoneRequest {
 		q.Type = "choice"
 		crit := make(map[string]string, len(req.Options))
 		for _, o := range req.Options {
-			if id, desc, ok := strings.Cut(o, ": "); ok {
-				crit[id] = desc
+			if o.Description != "" {
+				crit[o.ID] = o.Description
 			} else {
-				crit[o] = o
+				crit[o.ID] = o.ID
 			}
 		}
 		q.Criteria = crit

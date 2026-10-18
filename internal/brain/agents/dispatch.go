@@ -13,8 +13,15 @@ import (
 // unit-testable without a live model.
 type Classify func(ctx context.Context, prompt string) (string, error)
 
-// Decide picks one option among options for question and state on a decision model.
-type Decide func(ctx context.Context, kind, question, state string, options []string) (string, error)
+// Decide picks one option among options for question and state on a
+// decision model and returns the picked option's ID.
+type Decide func(ctx context.Context, kind, question, state string, options []DecideOption) (string, error)
+
+// DecideOption is one allowed answer to a Decide call.
+type DecideOption struct {
+	ID          string
+	Description string
+}
 
 // Dispatch picks the agent whose profile best fits message, among
 // candidates (only enabled agents should be passed in), and returns
@@ -39,13 +46,9 @@ func DispatchWithDecide(ctx context.Context, decide Decide, classify Classify, m
 		return candidates[0].ID
 	}
 	if decide != nil {
-		options := make([]string, len(candidates))
+		options := make([]DecideOption, len(candidates))
 		for i, a := range candidates {
-			if a.Description != "" {
-				options[i] = fmt.Sprintf("%s: %s", a.Name, a.Description)
-			} else {
-				options[i] = a.Name
-			}
+			options[i] = DecideOption{ID: a.Name, Description: a.Description}
 		}
 		q := "Pick the single best-fit assistant profile for the user's message."
 		choice, err := decide(ctx, "choice", q, message, options)

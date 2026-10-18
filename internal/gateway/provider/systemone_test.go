@@ -5,6 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,10 +75,10 @@ func TestSystemOnePresetsSendIdenticalBodies(t *testing.T) {
 		name string
 		req  DecideRequest
 	}{
-		{"choice", DecideRequest{Kind: DecideChoice, Question: "Pick one.", State: "some state", Options: []string{"a: first", "b"}}},
-		{"yesno", DecideRequest{Kind: DecideYesNo, Question: "Is it?", Options: []string{"yes", "no"}}},
+		{"choice", DecideRequest{Kind: DecideChoice, Question: "Pick one.", State: "some state", Options: []DecideOption{{ID: "a", Description: "first"}, {ID: "b"}}}},
+		{"yesno", DecideRequest{Kind: DecideYesNo, Question: "Is it?", Options: optIDs("yes", "no")}},
 		{"score default levels", DecideRequest{Kind: DecideScore, Question: "How much?"}},
-		{"score custom levels", DecideRequest{Kind: DecideScore, Question: "How much?", Options: []string{"low", "mid", "high"}}},
+		{"score custom levels", DecideRequest{Kind: DecideScore, Question: "How much?", Options: optIDs("low", "mid", "high")}},
 	} {
 		mu.Lock()
 		bodies = nil
@@ -96,6 +99,72 @@ func TestSystemOnePresetsSendIdenticalBodies(t *testing.T) {
 		}
 		if !bytes.Equal(got[0], got[1]) {
 			t.Fatalf("%s: bodies differ\nlaya: %s\njev:  %s", tc.name, got[0], got[1])
+		}
+	}
+}
+
+// optIDs builds decide options that carry only an id.
+func optIDs(ids ...string) []DecideOption {
+	opts := make([]DecideOption, len(ids))
+	for i, id := range ids {
+		opts[i] = DecideOption{ID: id}
+	}
+	return opts
+}
+
+// TestSystemOneChoiceCriteriaMapping pins the typed option wire for
+// both presets: criteria map each id to its description (the id when
+// there is none), and the reply matches on id, so an id with a colon
+// round-trips exactly.
+func TestSystemOneChoiceCriteriaMapping(t *testing.T) {
+	t.Parallel()
+	opts := []DecideOption{
+		{ID: "openai", Description: "any OpenAI model"},
+		{ID: "openai:gpt-5", Description: "flagship"},
+		{ID: "local:qwen3:4b", Description: "cheap: runs locally"},
+		{ID: "plain"},
+	}
+	wantCrit := map[string]any{
+		"openai":         "any OpenAI model",
+		"openai:gpt-5":   "flagship",
+		"local:qwen3:4b": "cheap: runs locally",
+		"plain":          "plain",
+	}
+	for _, build := range []func(SystemOneConfig) *SystemOne{NewLaya, NewJev} {
+		for _, tc := range []struct {
+			name       string
+			reply      string
+			wantChoice string
+			wantErr    bool
+		}{
+			{"colon id round-trips", "openai:gpt-5", "openai:gpt-5", false},
+			{"id with two colons round-trips", "local:qwen3:4b", "local:qwen3:4b", false},
+			{"prefix of a colon id is its own option", "openai", "openai", false},
+			{"case-insensitive returns id as given", "LOCAL:QWEN3:4B", "local:qwen3:4b", false},
+			{"description is not an id", "flagship", "", true},
+			{"full label is not an id", "openai:gpt-5: flagship", "", true},
+		} {
+			stub := newLayaStub(t, `{"type":"choice","choice":`+strconv.Quote(tc.reply)+`}`)
+			s := build(SystemOneConfig{Name: "d", BaseURL: stub.srv.URL})
+			t.Run(s.preset.driver+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				res, _, err := s.Decide(t.Context(), "m", DecideRequest{Kind: DecideChoice, Question: "Which route?", Options: opts})
+				if q := stub.got.Questions[systemoneQuestionID]; !reflect.DeepEqual(q.Criteria, wantCrit) {
+					t.Fatalf("criteria = %#v, want %#v", q.Criteria, wantCrit)
+				}
+				if tc.wantErr {
+					if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
+						t.Fatalf("err = %v, want 'not an allowed option'", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("Decide: %v", err)
+				}
+				if res.Choice != tc.wantChoice {
+					t.Fatalf("choice = %q, want %q", res.Choice, tc.wantChoice)
+				}
+			})
 		}
 	}
 }
