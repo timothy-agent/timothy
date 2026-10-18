@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/decide"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
@@ -254,12 +255,6 @@ func (o *oracle) classifierReply(purpose, prompt string) (string, bool) {
 			return kind + " light", ok
 		}
 		return kind + " full", ok
-	case "light":
-		l, ok := o.light[after("Goal: ")]
-		if l == o.right {
-			return "yes", ok
-		}
-		return "no", ok
 	case "dispatch":
 		a, ok := o.agent[after("\nMessage: ")]
 		for i, c := range a.Candidates {
@@ -336,6 +331,7 @@ func TestFixtureEval(t *testing.T) {
 		"agent decide": r.AgentDecide, "agent classify": r.AgentClassify,
 		"kb decide": r.KBDecide, "kb classify": r.KBClassify,
 	} {
+		t.Logf("%s: %s", name, m.Report())
 		if m.Total == 0 || m.Correct != m.Total {
 			t.Errorf("%s: %s, want every sample correct", name, m.Report())
 		}
@@ -345,7 +341,7 @@ func TestFixtureEval(t *testing.T) {
 			t.Errorf("decide %s/%s: native %d fallback %d of %d", m.Provider, m.Model, m.Native, m.Fallback, m.Total)
 		}
 	}
-	if f := gateFailures(r.AgentDecide, r.AgentClassify, true, r.decideMetrics()); len(f) != 0 {
+	if f := gateFailures(r.swapped(), true, r.decideMetrics()); len(f) != 0 {
 		t.Errorf("gate failed on a perfect native run: %v", f)
 	}
 }
@@ -365,7 +361,7 @@ func TestFixtureEvalWrongAnswers(t *testing.T) {
 			t.Errorf("%s: %s, want no sample credited", name, m.Report())
 		}
 	}
-	if f := gateFailures(r.AgentDecide, r.AgentClassify, false, r.decideMetrics()); len(f) == 0 {
+	if f := gateFailures(r.swapped(), false, r.decideMetrics()); len(f) == 0 {
 		t.Error("gate passed with zero decide accuracy")
 	}
 }
@@ -380,10 +376,10 @@ func TestFixtureEvalFallback(t *testing.T) {
 			t.Errorf("decide: native %d fallback %d of %d, want all fallback", m.Native, m.Fallback, m.Total)
 		}
 	}
-	if f := gateFailures(r.AgentDecide, r.AgentClassify, false, r.decideMetrics()); len(f) != 0 {
+	if f := gateFailures(r.swapped(), false, r.decideMetrics()); len(f) != 0 {
 		t.Errorf("gate without -require-native: %v", f)
 	}
-	f := gateFailures(r.AgentDecide, r.AgentClassify, true, r.decideMetrics())
+	f := gateFailures(r.swapped(), true, r.decideMetrics())
 	if len(f) != 1 || !strings.Contains(f[0], "llm fallback") {
 		t.Errorf("gate with -require-native = %v, want one llm fallback failure", f)
 	}
@@ -393,8 +389,8 @@ func TestFixtureEvalFallback(t *testing.T) {
 // ErrMalformed, never resolved to a guess.
 func TestFixtureMalformedReply(t *testing.T) {
 	t.Parallel()
-	req := provider.DecideRequest{Kind: provider.DecideChoice, Question: kindQuestion}
-	for _, o := range kindOptions() {
+	req := provider.DecideRequest{Kind: provider.DecideChoice, Question: missions.KindQuestion}
+	for _, o := range missions.KindOptions() {
 		req.Options = append(req.Options, provider.DecideOption{ID: o.ID, Description: o.Description})
 	}
 	if err := decide.Validate(&req); err != nil {
@@ -470,9 +466,16 @@ func TestGateFailures(t *testing.T) {
 		{"native required, no answer at all", Metric{Correct: 5, Total: 6}, Metric{Correct: 5, Total: 6}, true, failed, 1},
 	}
 	for _, tc := range tests {
-		if got := gateFailures(tc.decide, tc.class, tc.requireNative, tc.metrics); len(got) != tc.want {
+		if got := gateFailures([]swappedSite{{"Agent Auto-Dispatch", tc.decide, tc.class}}, tc.requireNative, tc.metrics); len(got) != tc.want {
 			t.Errorf("%s: failures = %v, want %d", tc.name, got, tc.want)
 		}
+	}
+	sites := []swappedSite{
+		{"Mission Kind", Metric{Correct: 4, Total: 6}, Metric{Correct: 5, Total: 6}},
+		{"Agent Auto-Dispatch", Metric{Correct: 6, Total: 6}, Metric{Correct: 5, Total: 6}},
+	}
+	if got := gateFailures(sites, false, native); len(got) != 1 || !strings.Contains(got[0], "Mission Kind") {
+		t.Errorf("one site below its classifier: failures = %v, want one naming Mission Kind", got)
 	}
 }
 
@@ -482,9 +485,6 @@ func TestMatchers(t *testing.T) {
 	tests := []struct {
 		name, got, want string
 	}{
-		{"kind exact", matchKind("coding"), "coding"},
-		{"kind case", matchKind(" General "), "general"},
-		{"kind prefix is not a match", matchKind("coding: produces code"), ""},
 		{"kb id", matchKB("C-B", cols), "c-b"},
 		{"kb new", matchKB("new", cols), "NEW"},
 		{"kb unknown", matchKB("c-z", cols), ""},
@@ -495,22 +495,6 @@ func TestMatchers(t *testing.T) {
 	for _, tc := range tests {
 		if tc.got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
-		}
-	}
-	for _, tc := range []struct {
-		choice      string
-		light, okay bool
-	}{{"yes", true, true}, {"No", false, true}, {"maybe", false, false}} {
-		if light, ok := matchLight(tc.choice); light != tc.light || ok != tc.okay {
-			t.Errorf("matchLight(%q) = %v, %v", tc.choice, light, ok)
-		}
-	}
-	for _, tc := range []struct {
-		reply, kind string
-		light       bool
-	}{{"general light", "general", true}, {"coding full", "coding", false}, {"Coding light.", "coding", false}, {"", "general", false}} {
-		if kind, light := parseKindAndLight(tc.reply); kind != tc.kind || light != tc.light {
-			t.Errorf("parseKindAndLight(%q) = %s, %v", tc.reply, kind, light)
 		}
 	}
 }

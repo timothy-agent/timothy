@@ -105,7 +105,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 		}
 	}
 	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption, enrich: kbEnrich, log: a.log}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, decide: a.missionDecide, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -166,6 +166,9 @@ type missionAPI struct {
 	// endpoint; nil (no gateway wiring) makes every omitted kind default
 	// straight to "coding", same as any classify error.
 	classify agents.Classify
+	// decide asks the decide role for kind and light (D-174); nil or
+	// an unbound role keeps classify.
+	decide missions.Decide
 	// codingExecutorDefault resolves settings.ValueCodingExecutor for a
 	// coding mission's create request that omits harness; nil (no
 	// settings wiring) leaves it native.
@@ -837,6 +840,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 // handler's wiring.
 func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 	deps := missions.ResolveDeps{
+		Decide:                h.decide,
 		Classify:              h.classify,
 		RouteForRole:          h.routeForRole,
 		RouteExists:           h.routeExists,
@@ -1006,77 +1010,12 @@ func classifyHasPlan(goal string) bool {
 	return len(hasPlanPattern.FindAllString(goal, -1)) >= 2
 }
 
-// classifyKindAndLight answers both missions.ClassifyKind and classifyLight's
-// questions in one model call — used only by the preview endpoint
-// (classifyGoal), which needs both on every debounced keystroke and
-// would otherwise pay for two full LLM turns per preview. create()'s
-// fallback path keeps using missions.ClassifyKind/classifyLight separately,
-// since it only ever needs light after kind is already known to be
-// general. Parsing takes the first recognised kind word and the first
-// recognised light/full word, in order, from the reply's fields
-// (punctuation stripped), rather than requiring exactly two fields.
-// Falls back to kind=general, light=false on a nil classifier, a
-// classify error, or no recognised word, the same cheap-mistake bias
-// as missions.ClassifyKind: no worktree, no branch, no coding harness, and
-// create() still receives the operator's explicit kind and light flag
-// from the form, so this only changes the suggestion.
-func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal string) (kind string, light bool) {
-	if classify == nil {
-		return "general", false
-	}
-	prompt := "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
-		"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
-		"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
-		"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
-		"Goal: " + goal
-	reply, err := classify(ctx, prompt)
-	if err != nil {
-		return "general", false
-	}
-	fields := strings.Fields(strings.ToLower(reply))
-	kind = ""
-	kindFound, lightFound := false, false
-	for _, field := range fields {
-		clean := strings.Trim(field, ".,")
-		if !kindFound {
-			switch clean {
-			case "coding":
-				kind = "coding"
-				kindFound = true
-				continue
-			case "general":
-				kind = "general"
-				kindFound = true
-				continue
-			}
-		}
-		if kindFound && !lightFound {
-			switch clean {
-			case "light":
-				light = true
-				lightFound = true
-			case "full":
-				light = false
-				lightFound = true
-			}
-		}
-	}
-	if !kindFound {
-		return "general", false
-	}
-	if !lightFound {
-		light = false
-	}
-	return kind, kind == "general" && light
-}
-
-
 // classifyGoal serves POST /v1/missions/classify: the same
 // classification create() falls back to when kind is omitted, exposed
 // standalone so the web UI's chip preview can show a mission's inferred
 // kind (and, for a general goal, a light suggestion) before submit
-// without actually creating anything. Uses classifyKindAndLight's
-// single-call form since every debounced keystroke hits this endpoint.
+// without actually creating anything. Runs missions.ClassifyKindAndLight,
+// the path create() takes, so the two never disagree.
 func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Goal string `json:"goal"`
@@ -1089,7 +1028,7 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
+	kind, light := missions.ClassifyKindAndLight(r.Context(), h.decide, h.classify, req.Goal)
 	hasPlan := classifyHasPlan(req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light, "has_plan": hasPlan})
 }

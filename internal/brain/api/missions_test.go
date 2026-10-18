@@ -909,7 +909,7 @@ func TestClassifyKind(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := missions.ClassifyKind(context.Background(), tc.classify, "some goal")
+			got := missions.ClassifyKind(context.Background(), nil, tc.classify, "some goal")
 			if got != tc.want {
 				t.Fatalf("ClassifyKind() = %q, want %q", got, tc.want)
 			}
@@ -927,7 +927,7 @@ func TestClassifyKindPrompt(t *testing.T) {
 		gotPrompt = prompt
 		return "general", nil
 	}
-	missions.ClassifyKind(context.Background(), classify, "some goal")
+	missions.ClassifyKind(context.Background(), nil, classify, "some goal")
 	if !strings.Contains(gotPrompt, "deliverable") && !strings.Contains(gotPrompt, "book") {
 		t.Fatalf("ClassifyKind prompt = %q, want it to mention deliverable or the book counter-example", gotPrompt)
 	}
@@ -1057,16 +1057,13 @@ func TestClassifyKindAndLight(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gotKind, gotLight := classifyKindAndLight(context.Background(), tc.classify, "some goal")
+			gotKind, gotLight := missions.ClassifyKindAndLight(context.Background(), nil, tc.classify, "some goal")
 			if gotKind != tc.wantKind || gotLight != tc.wantLight {
-				t.Fatalf("classifyKindAndLight() = (%q, %v), want (%q, %v)", gotKind, gotLight, tc.wantKind, tc.wantLight)
+				t.Fatalf("ClassifyKindAndLight() = (%q, %v), want (%q, %v)", gotKind, gotLight, tc.wantKind, tc.wantLight)
 			}
 		})
 	}
 }
-
-// TestClassifyKindAndLightWithDecide table-tests kind and light classification
-
 
 // TestClassifyHasPlan covers classifyHasPlan's shape heuristic (D-102,
 // issue #496): a goal shaped like an explicit numbered/step plan (two

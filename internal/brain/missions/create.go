@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -71,7 +72,9 @@ type CreateRequest struct {
 // ResolveDeps are the lookups ResolveDefaults needs. Every field is
 // nil-safe: an unset dep skips that one resolution step.
 type ResolveDeps struct {
-	// Classify answers the kind prompt when a request omits kind.
+	// Decide asks the decide role for kind when a request omits it.
+	Decide Decide
+	// Classify answers the kind prompt when Decide is nil or unbound.
 	Classify func(ctx context.Context, prompt string) (string, error)
 	// Agent resolves the request's agent; "" resolves the default agent.
 	Agent AgentResolver
@@ -109,7 +112,7 @@ func (e *RouteUnusableError) Error() string {
 func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (Mission, error) {
 	kind := req.Kind
 	if kind == "" {
-		kind = ClassifyKind(ctx, deps.Classify, req.Goal)
+		kind = ClassifyKind(ctx, deps.Decide, deps.Classify, req.Goal)
 	}
 	harness := req.Harness
 	if harness == "native" {
@@ -238,31 +241,119 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 	return m, nil
 }
 
-// ClassifyKind decides kind from goal by deliverable, not topic: a book
-// or article about coding is general. Falls back to "general" on a nil
-// classifier, a classify error, or an unrecognised reply, since general
-// is the cheaper mistake.
-func ClassifyKind(ctx context.Context, classify func(ctx context.Context, prompt string) (string, error), goal string) string {
-	if classify == nil {
-		return KindGeneral
+// Decide answers one decide-role question with the picked option id.
+// It returns ErrDecideUnbound when no decide role is bound, which sends
+// the caller to its classify path.
+type Decide func(ctx context.Context, kind, question, state string, options []gwclient.DecideOption) (string, error)
+
+// ErrDecideUnbound marks a Decide call skipped because no decide role
+// is bound.
+var ErrDecideUnbound = errors.New("missions: decide role unbound")
+
+// Kind and light on the decide role (D-174): the goal is the state,
+// each kind an "id: description" option.
+const (
+	KindQuestion  = "Classify this mission goal based on its deliverable, not its topic."
+	LightQuestion = "Is this goal a single-pass task deliverable in one response: a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?"
+)
+
+// KindOptions are the decide options for a mission's kind.
+func KindOptions() []gwclient.DecideOption {
+	return []gwclient.DecideOption{
+		{ID: KindCoding, Description: "produces or changes code, scripts, or configuration files in a repository"},
+		{ID: KindGeneral, Description: "output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)"},
 	}
-	prompt := "Decide how this mission's work happens, based on its deliverable, not its topic. Answer with exactly one word.\n" +
-		"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
-		"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
+}
+
+// ClassifyKind decides kind for a create request that omits it, on the
+// same path as ClassifyKindAndLight so create and the preview endpoint
+// never disagree. Light is never asked.
+func ClassifyKind(ctx context.Context, decide Decide, classify func(ctx context.Context, prompt string) (string, error), goal string) string {
+	kind, _ := classifyGoal(ctx, decide, classify, goal, false)
+	return kind
+}
+
+// ClassifyKindAndLight decides a goal's kind by deliverable, not topic,
+// and for a general goal whether it is light (one response, no plan or
+// artifacts). With a decide role bound (D-174), kind is a choice and
+// light a yesno, both with the goal as state. Unbound (nil decide or
+// ErrDecideUnbound), one classify prompt answers both axes. Any failure
+// or unknown answer gives general and light false: general is the
+// cheaper mistake, and light is only suggested when confident.
+func ClassifyKindAndLight(ctx context.Context, decide Decide, classify func(ctx context.Context, prompt string) (string, error), goal string) (kind string, light bool) {
+	return classifyGoal(ctx, decide, classify, goal, true)
+}
+
+func classifyGoal(ctx context.Context, decide Decide, classify func(ctx context.Context, prompt string) (string, error), goal string, askLight bool) (string, bool) {
+	if decide == nil {
+		return classifyKindAndLight(ctx, classify, goal)
+	}
+	choice, err := decide(ctx, "choice", KindQuestion, goal, KindOptions())
+	if errors.Is(err, ErrDecideUnbound) {
+		return classifyKindAndLight(ctx, classify, goal)
+	}
+	if err != nil || (choice != KindCoding && choice != KindGeneral) {
+		return KindGeneral, false
+	}
+	if choice == KindCoding || !askLight {
+		return choice, false
+	}
+	answer, err := decide(ctx, "yesno", LightQuestion, goal, nil)
+	return KindGeneral, err == nil && answer == "yes"
+}
+
+// classifyKindAndLight answers both axes in one classify call. Parsing
+// takes the first recognised kind word and the first recognised
+// light/full word, in order, from the reply's fields (punctuation
+// stripped).
+func classifyKindAndLight(ctx context.Context, classify func(ctx context.Context, prompt string) (string, error), goal string) (kind string, light bool) {
+	if classify == nil {
+		return "general", false
+	}
+	prompt := "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
+		"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
+		"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
+		"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
 		"Goal: " + goal
 	reply, err := classify(ctx, prompt)
 	if err != nil {
-		return KindGeneral
+		return "general", false
 	}
-	for _, field := range strings.Fields(strings.ToLower(reply)) {
-		switch strings.Trim(field, ".,") {
-		case KindCoding:
-			return KindCoding
-		case KindGeneral:
-			return KindGeneral
+	fields := strings.Fields(strings.ToLower(reply))
+	kind = ""
+	kindFound, lightFound := false, false
+	for _, field := range fields {
+		clean := strings.Trim(field, ".,")
+		if !kindFound {
+			switch clean {
+			case "coding":
+				kind = "coding"
+				kindFound = true
+				continue
+			case "general":
+				kind = "general"
+				kindFound = true
+				continue
+			}
+		}
+		if kindFound && !lightFound {
+			switch clean {
+			case "light":
+				light = true
+				lightFound = true
+			case "full":
+				light = false
+				lightFound = true
+			}
 		}
 	}
-	return KindGeneral
+	if !kindFound {
+		return "general", false
+	}
+	if !lightFound {
+		light = false
+	}
+	return kind, kind == "general" && light
 }
 
 // RouteUnusable resolves route on one axis (harness "" is the chat

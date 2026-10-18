@@ -446,6 +446,7 @@ func main() {
 	// runs besides the HTTP handler (the workflow engine), wired
 	// from the same sources the handler's own fields use (issue #816).
 	missionResolve := missions.ResolveDeps{
+		Decide:       chat.MissionDecideOverGateway(gwc),
 		Classify:     chat.ClassifyOverGateway(gwc),
 		Agent:        missionAgentResolver(agentReg),
 		RouteForRole: routeForRole,
@@ -1228,7 +1229,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, mcpAuth, openrouterAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, cliproxyURL, cliproxyKey, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), chat.MissionDecideOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, cliproxyURL, cliproxyKey, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags),
 		authStore, authKeyPair)
 
