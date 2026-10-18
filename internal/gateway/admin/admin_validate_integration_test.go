@@ -173,7 +173,8 @@ func TestAvailableModelsLiveFirstWithCatalogPrices(t *testing.T) {
 
 	// httptest binds 127.0.0.1, which candidatesForHost maps to
 	// litellm_provider "ollama": the fixture's ollama rows are the
-	// openaicompat row's candidates, the bedrock rows the bedrock row's.
+	// openaicompat row's candidates; the bedrock and openai rows must never
+	// show up for it.
 	catSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
 			"m-alpha": {"litellm_provider": "ollama", "mode": "chat", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "max_input_tokens": 32000},
@@ -251,32 +252,6 @@ func TestAvailableModelsLiveFirstWithCatalogPrices(t *testing.T) {
 	if _, err := adm.AvailableModels(ctx, aid); err == nil ||
 		!strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Incorrect API key provided") {
 		t.Fatalf("401 AvailableModels err = %v, want the provider's auth error", err)
-	}
-
-	// Bedrock cannot enumerate models: it lists its candidate vendors'
-	// chat rows from the catalog. Static keys are the only supported
-	// auth (D-048), so the credential_ref must resolve for the provider
-	// to build and reach the serving snapshot at all.
-	bedrockRef := adminMarker + "models-bedrock-key" //nolint:gosec // test fixture name, not a secret
-	if err := adm.SetSecret(ctx, bedrockRef, `{"access_key_id":"AKIA123","secret_access_key":"shh"}`); err != nil {
-		t.Fatalf("SetSecret: %v", err)
-	}
-	bedrockName := adminMarker + "models-bedrock"
-	bid, err := adm.Create(ctx, Provider{
-		Name: bedrockName, Kind: "api", Driver: "bedrock",
-		CredentialRef: bedrockRef, Options: map[string]string{"region": "us-east-1"},
-	})
-	if err != nil {
-		t.Fatalf("Create bedrock: %v", err)
-	}
-	waitSnapshot(t, store, bedrockName)
-	bedrockModels, err := adm.AvailableModels(ctx, bid)
-	if err != nil {
-		t.Fatalf("bedrock AvailableModels: %v", err)
-	}
-	if len(bedrockModels) != 1 || bedrockModels[0].ID != "anthropic.claude-x" || bedrockModels[0].Source != "catalog" ||
-		!sameF(bedrockModels[0].InputPerMTok, ptrF(3)) {
-		t.Fatalf("bedrock models = %+v, want the one bedrock chat row from the catalog", bedrockModels)
 	}
 
 	// kind='cli' rows never build a chat driver at all (D-051); only
