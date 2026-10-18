@@ -128,8 +128,8 @@ func (s *Store) Search(ctx context.Context, q, litellmProvider string, limit int
 // SearchProviders is Search's multi-provider sibling: q filters
 // case-insensitive substring on model_key as usual, but the provider
 // restriction is a set rather than a
-// single exact value — the admin catalog-models endpoint's candidate
-// litellm_provider(s) from a driver/base_url can be more than one
+// single exact value: a provider row's candidate litellm_provider(s)
+// from a driver/base_url can be more than one
 // (e.g. bedrock's "bedrock"/"bedrock_converse"). An empty set returns
 // an empty list, never the whole catalog (D-171). limit < 0 returns
 // every match (the provider listing's context-window source). An empty

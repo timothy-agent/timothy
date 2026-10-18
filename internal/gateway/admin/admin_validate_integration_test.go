@@ -57,6 +57,9 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 	if !res.OK || res.Model != "m-alpha" {
 		t.Fatalf("Validate = %+v, want ok probe of m-alpha", res)
 	}
+	if len(res.Models) != 2 || res.Models[0].ID != "m-alpha" || res.Models[1].ID != "m-beta" || res.Models[0].Source != "live" {
+		t.Fatalf("Validate models = %+v, want live m-alpha and m-beta", res.Models)
+	}
 
 	// Nothing persisted: validation must leave no provider row behind.
 	db, _ := pool.Get()
@@ -85,8 +88,8 @@ func TestValidateProbesWithoutPersisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate dead endpoint: %v", err)
 	}
-	if res.OK || res.Detail == "" {
-		t.Fatalf("dead endpoint = %+v, want honest failure", res)
+	if res.OK || res.Detail == "" || res.Models != nil {
+		t.Fatalf("dead endpoint = %+v, want honest failure with no model list", res)
 	}
 
 	// Config errors reject before any probe.

@@ -7,10 +7,12 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // modelListCatalog is the fixture LiteLLM source for the list builder
@@ -134,6 +136,20 @@ func TestModelList(t *testing.T) {
 			want:  []ListedModel{},
 		},
 		{
+			name:  "catalog fallback for an unmapped host is empty",
+			p:     Provider{ID: "p-mars", Name: "mars-ai", Kind: "api", Driver: "openaicompat", BaseURL: "https://mars-ai.example.com/v1", DefaultModel: "m-custom"},
+			fetch: nil,
+			want:  []ListedModel{},
+		},
+		{
+			name: "litellm_provider override on an unmapped host lists that vendor",
+			p: Provider{ID: "p-mars-anthropic", Name: "mars-ai", Kind: "api", Driver: "openaicompat", BaseURL: "https://mars-ai.example.com/v1",
+				DefaultModel: "m-custom", Options: map[string]string{"litellm_provider": "anthropic"}},
+			fetch: nil,
+			want: []ListedModel{{ID: "claude-sonnet-4-5", Source: "catalog",
+				InputPerMTok: ptrF(3), OutputPerMTok: ptrF(15), MaxInputTokens: ptrI(200000)}},
+		},
+		{
 			name:  "claude-cli falls back to anthropic rows",
 			p:     Provider{ID: "p-cc", Name: "Claude Code", Kind: "cli", Driver: "claude-cli"},
 			fetch: nil,
@@ -175,7 +191,7 @@ func TestModelListCachesLiveListing(t *testing.T) {
 		return []provider.AvailableModel{{ID: "gpt-4o"}}, nil
 	}
 	for range 2 {
-		got, err := adm.modelList(t.Context(), p, fetch)
+		got, err := adm.modelList(t.Context(), p, adm.models.cached(p.ID, fetch))
 		if err != nil {
 			t.Fatalf("modelList: %v", err)
 		}
@@ -198,7 +214,7 @@ func TestModelListPassesAuthErrorThroughUncached(t *testing.T) {
 		return nil, authErr
 	}
 	for range 2 {
-		_, err := adm.modelList(t.Context(), p, fetch)
+		_, err := adm.modelList(t.Context(), p, adm.models.cached(p.ID, fetch))
 		if !errors.Is(err, authErr) {
 			t.Fatalf("err = %v, want the provider's own auth error", err)
 		}
@@ -238,5 +254,102 @@ func TestListedModelJSONShape(t *testing.T) {
 		`{"id":"gpt-4o","display_name":"GPT-4o","source":"catalog","input_per_mtok":2,"output_per_mtok":8,"max_input_tokens":128000}]`
 	if string(b) != want {
 		t.Fatalf("json = %s\nwant   %s", b, want)
+	}
+}
+
+// fakeDriver is a provider.Provider; listingDriver adds ListModels.
+type fakeDriver struct{}
+
+func (fakeDriver) Name() string                        { return "fake" }
+func (fakeDriver) Kind() provider.Kind                 { return provider.KindAPI }
+func (fakeDriver) Capabilities() []provider.Capability { return nil }
+func (fakeDriver) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	return nil, errors.New("not used")
+}
+
+type listingDriver struct {
+	fakeDriver
+	ids []string
+	err error
+}
+
+func (d listingDriver) ListModels(ctx context.Context) ([]provider.AvailableModel, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	return staticFetch(d.ids...)(ctx)
+}
+
+func TestValidatedModels(t *testing.T) {
+	openai := Provider{Name: "OpenAI", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1"}
+	tests := []struct {
+		name  string
+		p     Provider
+		model string
+		drv   provider.Provider
+		want  []string
+	}{
+		{
+			name: "lister returns live ids, non chat dropped", p: openai, model: "gpt-4o",
+			drv:  listingDriver{ids: []string{"gpt-4o", "gpt-image-1", "house-model"}},
+			want: []string{"gpt-4o", "house-model"},
+		},
+		{
+			name: "listing error yields nil", p: openai, model: "gpt-4o",
+			drv:  listingDriver{err: errors.New("http 500")},
+			want: nil,
+		},
+		{
+			name: "non lister falls back to catalog", p: Provider{Name: "Bedrock", Kind: "api", Driver: "bedrock"}, model: "amazon.nova-pro",
+			drv:  fakeDriver{},
+			want: []string{"anthropic.claude-x", "amazon.nova-pro"},
+		},
+		{
+			name:  "validate model stands in for default model",
+			p:     Provider{Name: "my-sub", Kind: "api", Driver: "openaicompat", BaseURL: "http://cliproxy:8317/v1"},
+			model: "claude-sonnet-4-5",
+			drv:   listingDriver{ids: []string{"claude-sonnet-4-5", "gpt-4o"}},
+			want:  []string{"claude-sonnet-4-5"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			adm := modelListAdmin(t)
+			got := adm.validatedModels(t.Context(), tc.p, tc.model, tc.drv)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("got %+v, want nil", got)
+				}
+				return
+			}
+			ids := make([]string, len(got))
+			for i, m := range got {
+				ids[i] = m.ID
+			}
+			if strings.Join(ids, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("ids = %v, want %v", ids, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateResultJSONShape(t *testing.T) {
+	b, err := json.Marshal(ValidateResult{
+		TestResult: TestResult{OK: true, LatencyMS: 12, Model: "gpt-4o"},
+		Models:     []ListedModel{{ID: "gpt-4o", Source: "live"}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"ok":true,"latency_ms":12,"model":"gpt-4o","models":[{"id":"gpt-4o","source":"live","input_per_mtok":null,"output_per_mtok":null,"max_input_tokens":null}]}`
+	if string(b) != want {
+		t.Fatalf("json = %s\nwant   %s", b, want)
+	}
+	b, err = json.Marshal(ValidateResult{TestResult: TestResult{Model: "m", Detail: "401"}})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if want := `{"ok":false,"latency_ms":0,"model":"m","detail":"401","models":null}`; string(b) != want {
+		t.Fatalf("failed probe json = %s\nwant   %s", b, want)
 	}
 }
