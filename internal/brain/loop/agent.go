@@ -522,7 +522,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	total := stream.Usage{}
 	var lastMeta *stream.Meta
 	// providerState is turn-local driver continuation state (D-067,
-	// e.g. openai-responses' previous_response_id): captured off each
+	// e.g. the Responses API's previous_response_id): captured off each
 	// step's done Meta and echoed on the next step's request. It dies
 	// with the turn — nothing resets it mid-turn on purpose. On chain
 	// failover the serving driver can change mid-turn; the state names
@@ -850,7 +850,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		// everything the turn needed (mission_status/discover_notes/
 		// submit_plan/review_verdict) — sending its result back for
 		// another completion just burns a model call, and on reasoning
-		// models over openai-responses that pointless continuation
+		// models over the Responses API that pointless continuation
 		// returns empty output and fails the whole turn (D-063). An
 		// errored/denied sentinel result still needs the model to see
 		// it and retry, so only a clean result ends the turn here.

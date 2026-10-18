@@ -271,7 +271,7 @@ func TestAgentToolCallThenAnswer(t *testing.T) {
 }
 
 // TestAgentProviderStateEchoedAcrossSteps pins D-067: a driver's
-// continuation state (e.g. the openai-responses driver's
+// continuation state (e.g. the Responses API's
 // previous_response_id) riding a step's done Meta.ProviderState must be
 // echoed back on the turn's NEXT step request, and a fresh turn must
 // start with no state at all.

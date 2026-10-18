@@ -85,69 +85,6 @@ func TestListModelsMalformedBody(t *testing.T) {
 	}
 }
 
-func TestOpenAIResponsesListModels(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		status  int
-		body    string
-		want    []string
-		wantErr string
-	}{
-		{name: "decodes envelope", status: http.StatusOK, body: `{"object":"list","data":[{"id":"gpt-a","object":"model"},{"id":"gpt-b"}]}`, want: []string{"gpt-a", "gpt-b"}},
-		{name: "non-200 errors", status: http.StatusUnauthorized, body: `{"error":"bad key"}`, wantErr: "openai-responses: list models: http 401"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var gotAuth, gotPath, gotExtra, gotMethod string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotAuth = r.Header.Get("Authorization")
-				gotPath = r.URL.Path
-				gotExtra = r.Header.Get("X-Extra")
-				gotMethod = r.Method
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(tt.status)
-				_, _ = w.Write([]byte(tt.body))
-			}))
-			t.Cleanup(srv.Close)
-			var p Provider = NewOpenAIResponses(OpenAIResponsesConfig{
-				Name: "ors-test", BaseURL: srv.URL + "/v1", APIKey: "test-key",
-				Headers: map[string]string{"X-Extra": "v"}, Timeout: 10 * time.Second,
-			})
-			lister, ok := p.(ModelLister)
-			if !ok {
-				t.Fatal("openai-responses does not implement ModelLister")
-			}
-
-			models, err := lister.ListModels(t.Context())
-			if gotMethod != http.MethodGet || gotAuth != "Bearer test-key" || gotPath != "/v1/models" || gotExtra != "v" {
-				t.Fatalf("request method=%q auth=%q path=%q extra=%q", gotMethod, gotAuth, gotPath, gotExtra)
-			}
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ListModels: %v", err)
-			}
-			if got := modelIDs(models); strings.Join(got, ",") != strings.Join(tt.want, ",") {
-				t.Fatalf("ids = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func modelIDs(models []AvailableModel) []string {
-	ids := make([]string, len(models))
-	for i, m := range models {
-		ids[i] = m.ID
-	}
-	return ids
-}
-
 // stubFoundationModels records the aws.Config the control client was
 // built from and serves a fixed ListFoundationModels result.
 type stubFoundationModels struct {
