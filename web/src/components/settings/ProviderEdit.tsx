@@ -918,6 +918,9 @@ function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
             <TableRow>
               <TableCell colSpan={3} className="text-muted-foreground">
                 no catalog models found
+                {q === '' && (
+                  <span className="block">Type a model id in Default model or on the Routing page.</span>
+                )}
               </TableCell>
             </TableRow>
           )}

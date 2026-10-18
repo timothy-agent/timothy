@@ -35,9 +35,9 @@ func (a *Admin) CatalogSearch(ctx context.Context, q, litellmProvider string, li
 // on a provider's form, offering real catalog ids beyond what's
 // already declared. A kind='cli' row has no chat driver (D-051), but
 // claude-cli specifically talks Anthropic's own API under the hood, so
-// it maps to the "anthropic" catalog provider rather than falling back
-// to an unrestricted search; other cli drivers (codex-cli) get no
-// restriction, same as an unrecognized api driver/host.
+// it maps to the "anthropic" catalog provider. Other cli drivers
+// (codex-cli) and an unrecognized api driver/host map to no vendor and
+// get an empty list (D-171).
 func (a *Admin) CatalogModelsForProvider(ctx context.Context, id, q string, limit int) ([]catalog.Model, error) {
 	p, err := a.get(ctx, id)
 	if err != nil {
