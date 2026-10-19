@@ -67,6 +67,8 @@ function presetLitellmProvider(presetId: string): string {
     bedrock: 'bedrock',
     glm: 'zai',
     grok: 'xai',
+    deepseek: 'deepseek',
+    nebius: 'nebius',
     ollama: 'ollama',
     jev: 'typesafe',
   }[presetId] ?? ''

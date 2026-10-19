@@ -32,6 +32,13 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('glm')
   })
 
+  it.each([
+    ['https://api.deepseek.com', 'deepseek'],
+    ['https://api.tokenfactory.nebius.com/v1', 'nebius'],
+  ])('matches %s to the %s preset by host', (base_url, id) => {
+    expect(matchPreset(provider({ base_url })).id).toBe(id)
+  })
+
   it('falls back to custom for an unknown url', () => {
     const p = provider({ base_url: 'https://example.com/v1' })
     expect(matchPreset(p).id).toBe('custom')
