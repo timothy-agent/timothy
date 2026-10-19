@@ -446,7 +446,7 @@ func TestDecideSuccess(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"choice":"coding","scores":{"coding":0.95,"general":0.05},"provider":"laya-svc","model":"typed-decisions","ledger_id":"ledg-1"}`)
+		_, _ = fmt.Fprint(w, `{"choice":"coding","scores":{"coding":0.95,"general":0.05},"provider":"jev-prod","model":"jev-latest","ledger_id":"ledg-1"}`)
 	})
 
 	res, err := c.Decide(t.Context(), DecideRequest{
@@ -464,7 +464,7 @@ func TestDecideSuccess(t *testing.T) {
 	if !strings.Contains(string(gotBody), `"options":[{"id":"coding","description":"writes code"},{"id":"team:general"}]`) {
 		t.Fatalf("body = %s, want typed options on the wire", gotBody)
 	}
-	if res.Choice != "coding" || res.Provider != "laya-svc" || res.Model != "typed-decisions" || res.LedgerID != "ledg-1" {
+	if res.Choice != "coding" || res.Provider != "jev-prod" || res.Model != "jev-latest" || res.LedgerID != "ledg-1" {
 		t.Fatalf("res = %+v, unexpected response", res)
 	}
 	if res.Scores["coding"] != 0.95 {

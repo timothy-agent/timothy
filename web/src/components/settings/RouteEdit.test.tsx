@@ -327,24 +327,24 @@ describe('RouteEdit scored pipeline', () => {
       capability: 'decide',
       role: 'decide',
       chain: [
-        { provider_id: 'p-laya', model: 'typed-decisions' },
+        { provider_id: 'p-jev', model: 'jev-latest' },
         { provider_id: 'p1', model: 'sonnet' },
       ],
       resolved: [
-        { provider_id: 'p-laya', provider_name: 'laya', model: 'typed-decisions', usable: true, latency_ms: 32 },
+        { provider_id: 'p-jev', provider_name: 'jev', model: 'jev-latest', usable: true, latency_ms: 32 },
         { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, latency_ms: 750 },
       ],
-      serving: { provider_id: 'p-laya', model: 'typed-decisions' },
+      serving: { provider_id: 'p-jev', model: 'jev-latest' },
     }
     const deciderProviders: AdminProvider[] = [
       ...providers,
       {
-        id: 'p-laya',
-        name: 'laya',
+        id: 'p-jev',
+        name: 'jev',
         kind: 'api',
-        driver: 'laya',
-        base_url: 'http://laya:8000',
-        default_model: 'typed-decisions',
+        driver: 'jev',
+        base_url: 'https://api.typesafe.ai',
+        default_model: 'jev-latest',
         credential_ref: '',
         headers: {},
         enabled: true,
@@ -356,7 +356,7 @@ describe('RouteEdit scored pipeline', () => {
 
     expect(await screen.findByRole('heading', { name: 'decide' })).toBeInTheDocument()
     expect(screen.getByText('serving').closest('[data-testid="pipeline-card"]')).toHaveTextContent(
-      'typed-decisions',
+      'jev-latest',
     )
     expect(screen.getByText('sonnet')).toBeInTheDocument()
   })

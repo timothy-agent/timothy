@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AdminProvider } from '../api/types'
-import { matchPreset } from './providerPresets'
+import { matchPreset, providerPresets } from './providerPresets'
 
 function provider(overrides: Partial<AdminProvider>): AdminProvider {
   return {
@@ -47,9 +47,13 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('anthropic')
   })
 
-  it('matches the laya preset by driver', () => {
+  it('offers no laya preset', () => {
+    expect(providerPresets.map((x) => x.id)).not.toContain('laya')
+  })
+
+  it('falls back to custom for a row with the removed laya driver', () => {
     const p = provider({ driver: 'laya', base_url: 'http://laya:8000' })
-    expect(matchPreset(p).id).toBe('laya')
+    expect(matchPreset(p).id).toBe('custom')
   })
 
   it('matches the jev preset by driver', () => {

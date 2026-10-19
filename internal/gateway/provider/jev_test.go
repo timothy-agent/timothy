@@ -133,13 +133,16 @@ func TestJevDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	stub := newJevStub(t, `{"type":"choice","choice":"hallucinated","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
 	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
 
-	_, _, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
+	_, usage, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
 		Options:  optIDs("coding", "research", "general"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("err = %v, want 'not an allowed option'", err)
+	}
+	if usage == nil {
+		t.Fatal("usage dropped on a bad answer")
 	}
 }
 
@@ -169,6 +172,15 @@ func TestJevDecideYesNo(t *testing.T) {
 				t.Fatalf("res = %+v", res)
 			}
 		})
+	}
+}
+
+func TestJevDecideMissingAnswerIsAnError(t *testing.T) {
+	t.Parallel()
+	stub := newJevStub(t, `{"type":"choice","choice":"a"}`)
+	j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
+	if _, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: optIDs("yes", "no")}); err == nil || !strings.Contains(err.Error(), "no noul probability") {
+		t.Fatalf("err = %v, want 'no noul probability'", err)
 	}
 }
 
