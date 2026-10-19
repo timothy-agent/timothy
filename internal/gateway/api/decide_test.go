@@ -268,7 +268,7 @@ type nativeDecider struct {
 	got provider.DecideRequest
 }
 
-func (d *nativeDecider) Name() string        { return "laya" }
+func (d *nativeDecider) Name() string        { return "decider" }
 func (d *nativeDecider) Kind() provider.Kind { return provider.KindAPI }
 func (d *nativeDecider) Capabilities() []provider.Capability {
 	return []provider.Capability{provider.CapDecide}
@@ -291,7 +291,7 @@ func TestDecideAttemptNativeDriver(t *testing.T) {
 	native := &nativeDecider{}
 	req := provider.DecideRequest{Kind: "yesno", Question: "Is it done?", Options: []provider.DecideOption{{ID: "yes"}, {ID: "no"}}}
 
-	res, usage, effort, err := decideAttempt(t.Context(), router.Attempt{Provider: native, ProviderName: "laya", Model: "laya-1"}, req, true)
+	res, usage, effort, err := decideAttempt(t.Context(), router.Attempt{Provider: native, ProviderName: "decider", Model: "decider-1"}, req, true)
 	if err != nil {
 		t.Fatalf("decideAttempt: %v", err)
 	}
@@ -438,78 +438,24 @@ func TestDecideClientCancelRecordsCancelled(t *testing.T) {
 	}
 }
 
-func TestDecideLayaProviderNative(t *testing.T) {
+func TestDecideJev5xxFailsOverToLLM(t *testing.T) {
 	t.Parallel()
-	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"model": "typed-decisions",
-			"answers": {
-				"q": {
-					"type": "choice",
-					"choice": "coding",
-					"confidence": 0.95,
-					"probabilities": {"coding": 0.95, "research": 0.05}
-				}
-			},
-			"usage": {"input_tokens": 12}
-		}`))
-	}))
-	defer layaSrv.Close()
-
-	provRows := []router.ProviderRow{
-		{ID: "p-laya", Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: layaSrv.URL, DefaultModel: "laya-english", Enabled: true},
-	}
-	routeRows := []router.RouteRow{
-		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "typed-decisions"},
-		}, Enabled: true},
-	}
-	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
-	if err != nil {
-		t.Fatalf("BuildSnapshot: %v", err)
-	}
-
-	a, rec := newAPI(snap)
-	w := postJSON(t, a.handleDecide, choiceBody)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
-	}
-	out := decodeDecide(t, w.Body.Bytes())
-	if out.Choice != "coding" || out.Provider != "laya-svc" {
-		t.Fatalf("out = %+v", out)
-	}
-	if out.Scores["coding"] != 0.95 {
-		t.Fatalf("out.Scores = %v, want 0.95 for coding", out.Scores)
-	}
-
-	entries := rec.all()
-	if len(entries) != 1 {
-		t.Fatalf("ledger entries = %d, want 1", len(entries))
-	}
-	if entries[0].Status != "ok" || entries[0].Effort != "" {
-		t.Fatalf("ledger entry = %+v, want status=ok and empty effort for native decider", entries[0])
-	}
-}
-
-func TestDecideLayaFailoverToLLM(t *testing.T) {
-	t.Parallel()
-	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"detail": "laya is down"}`))
+		_, _ = w.Write([]byte(`{"detail": "jev is down"}`))
 	}))
-	defer layaSrv.Close()
+	defer jevSrv.Close()
 
 	chatSrv := oaiOK(t, "research")
 	defer chatSrv.Close()
 
 	provRows := []router.ProviderRow{
-		{ID: "p-laya", Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: layaSrv.URL, DefaultModel: "laya-english", Enabled: true},
+		{ID: "p-jev", Name: "jev-prod", Kind: "api", Driver: "jev", BaseURL: jevSrv.URL, DefaultModel: "jev-latest", Enabled: true},
 		{ID: "p-chat", Name: "chat-fallback", Kind: "api", Driver: "openaicompat", BaseURL: chatSrv.URL, DefaultModel: "chat-1", Enabled: true},
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "typed-decisions"},
+			{ProviderID: "p-jev", Model: "jev-latest"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}
@@ -532,20 +478,20 @@ func TestDecideLayaFailoverToLLM(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("ledger entries = %d, want 2 (fail then ok)", len(entries))
 	}
-	if entries[0].Provider != "laya-svc" || entries[0].Status != "error" || entries[0].ErrorCode != "provider_error" {
-		t.Fatalf("entry[0] = %+v, want laya error", entries[0])
+	if entries[0].Provider != "jev-prod" || entries[0].Status != "error" || entries[0].ErrorCode != "provider_error" {
+		t.Fatalf("entry[0] = %+v, want jev error", entries[0])
 	}
 	if entries[1].Provider != "chat-fallback" || entries[1].Status != "ok" || entries[1].Effort != "low" {
 		t.Fatalf("entry[1] = %+v, want chat fallback success with low effort", entries[1])
 	}
 }
 
-func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
+func TestDecideJevInvalidChoiceFailsOverToLLM(t *testing.T) {
 	t.Parallel()
-	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "typed-decisions",
+			"model": "jev-latest",
 			"answers": {
 				"q": {
 					"type": "choice",
@@ -557,18 +503,18 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 			"usage": {"input_tokens": 12}
 		}`))
 	}))
-	defer layaSrv.Close()
+	defer jevSrv.Close()
 
 	chatSrv := oaiOK(t, "research")
 	defer chatSrv.Close()
 
 	provRows := []router.ProviderRow{
-		{ID: "p-laya", Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: layaSrv.URL, DefaultModel: "laya-english", Enabled: true},
+		{ID: "p-jev", Name: "jev-prod", Kind: "api", Driver: "jev", BaseURL: jevSrv.URL, DefaultModel: "jev-latest", Enabled: true},
 		{ID: "p-chat", Name: "chat-fallback", Kind: "api", Driver: "openaicompat", BaseURL: chatSrv.URL, DefaultModel: "chat-1", Enabled: true},
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "typed-decisions"},
+			{ProviderID: "p-jev", Model: "jev-latest"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}
@@ -591,8 +537,8 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("ledger entries = %d, want 2 (fail then ok)", len(entries))
 	}
-	if entries[0].Provider != "laya-svc" || entries[0].Status != "error" {
-		t.Fatalf("entry[0] = %+v, want laya error for invalid option", entries[0])
+	if entries[0].Provider != "jev-prod" || entries[0].Status != "error" {
+		t.Fatalf("entry[0] = %+v, want jev error for invalid option", entries[0])
 	}
 	if entries[1].Provider != "chat-fallback" || entries[1].Status != "ok" {
 		t.Fatalf("entry[1] = %+v, want fallback success", entries[1])

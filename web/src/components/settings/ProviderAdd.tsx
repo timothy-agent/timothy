@@ -279,7 +279,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const isBedrock = preset.driver === 'bedrock'
   const isAnthropic = preset.id === 'anthropic'
   const isCursor = preset.id === 'cursor'
-  const isDecider = preset.driver === 'laya' || preset.driver === 'jev'
+  const isDecider = preset.driver === 'jev'
   // isCli: Cursor creates a kind='cli' row (D-051) for coding missions.
   const isCli = isCursor
   // bedrockAmbient: the gateway's own cloud identity signs requests,
@@ -615,7 +615,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             </Field>
           )}
 
-          {!isCli && (preset.id === 'custom' || preset.id === 'laya') && (
+          {!isCli && preset.id === 'custom' && (
             <Field label="Base URL">
               <Input
                 value={baseURL}
@@ -751,7 +751,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             </Field>
           )}
 
-          {!isCli && !isBedrock && preset.id !== 'custom' && preset.id !== 'laya' && (
+          {!isCli && !isBedrock && preset.id !== 'custom' && (
             <details className="group">
               <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
                 Advanced: base URL

@@ -2019,17 +2019,17 @@ func (p capsOnlyProvider) Stream(context.Context, provider.CompletionRequest) (<
 func TestResolveDecideAcceptsChatOrDecider(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
-		{ID: "p1", Name: "laya", Kind: "api", Driver: "openaicompat", BaseURL: "https://laya.example/v1", DefaultModel: "laya-1", Enabled: true},
+		{ID: "p1", Name: "decider", Kind: "api", Driver: "openaicompat", BaseURL: "https://decider.example/v1", DefaultModel: "decider-1", Enabled: true},
 		{ID: "p2", Name: "chat", Kind: "api", Driver: "openaicompat", BaseURL: "https://chat.example/v1", DefaultModel: "m", Enabled: true},
 		{ID: "p3", Name: "embed", Kind: "api", Driver: "openaicompat", BaseURL: "https://embed.example/v1", DefaultModel: "e", Enabled: true},
 	}
 	routeRows := []RouteRow{{Name: "decide", Capability: "decide", Role: "decide", Chain: []ChainEntry{
-		{ProviderID: "p1", Model: "laya-1"},
+		{ProviderID: "p1", Model: "decider-1"},
 		{ProviderID: "p2", Model: "m"},
 		{ProviderID: "p3", Model: "e"},
 	}, Enabled: true}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
-	snap.registry.Add("laya", capsOnlyProvider{name: "laya", caps: []provider.Capability{provider.CapDecide}})
+	snap.registry.Add("decider", capsOnlyProvider{name: "decider", caps: []provider.Capability{provider.CapDecide}})
 	snap.registry.Add("chat", capsOnlyProvider{name: "chat", caps: []provider.Capability{provider.CapChat}})
 	snap.registry.Add("embed", capsOnlyProvider{name: "embed", caps: []provider.Capability{provider.CapEmbeddings}})
 
@@ -2037,7 +2037,7 @@ func TestResolveDecideAcceptsChatOrDecider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got := attemptNames(attempts); got != "laya/laya-1,chat/m" {
+	if got := attemptNames(attempts); got != "decider/decider-1,chat/m" {
 		t.Fatalf("attempts = %s, want the decider then the chat entry", got)
 	}
 
