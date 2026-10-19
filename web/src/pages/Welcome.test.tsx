@@ -84,6 +84,8 @@ describe('Welcome', () => {
       'Anthropic',
       'GLM (Z.ai)',
       'Grok (xAI)',
+      'DeepSeek',
+      'Nebius',
       'AWS Bedrock',
       'Cursor',
       'Custom endpoint',

@@ -18,6 +18,9 @@ func TestCandidateProviders(t *testing.T) {
 		{"gemini host", "openaicompat", "https://generativelanguage.googleapis.com/v1beta", []string{"gemini"}},
 		{"zai host", "openaicompat", "https://api.z.ai/v1", []string{"zai"}},
 		{"xai host", "openaicompat", "https://api.x.ai/v1", []string{"xai"}},
+		{"deepseek host", "openaicompat", "https://api.deepseek.com", []string{"deepseek"}},
+		{"nebius host", "openaicompat", "https://api.tokenfactory.nebius.com/v1", []string{"nebius"}},
+		{"legacy nebius studio host", "openaicompat", "https://api.studio.nebius.com/v1", []string{"nebius"}},
 		{"openrouter host", "openaicompat", "https://openrouter.ai/api/v1", []string{"openrouter"}},
 		{"localhost ollama", "openaicompat", "http://localhost:11434/v1", []string{"ollama"}},
 		{"127.0.0.1 ollama", "openaicompat", "http://127.0.0.1:11434/v1", []string{"ollama"}},
@@ -43,6 +46,8 @@ func TestMatch(t *testing.T) {
 		{ModelKey: "claude-3-5-sonnet"},
 		{ModelKey: "anthropic/claude-3-opus"},
 		{ModelKey: "gemini/gemini-1.5-pro"},
+		{ModelKey: "nebius/deepseek-ai/DeepSeek-V4-Flash", LitellmProvider: "nebius"},
+		{ModelKey: "other/deepseek-ai/DeepSeek-V4-Pro", LitellmProvider: "nebius"},
 	}
 	cases := []struct {
 		name    string
@@ -53,6 +58,8 @@ func TestMatch(t *testing.T) {
 		{"exact match wins over segment match", "gemini/gemini-1.5-pro", "gemini/gemini-1.5-pro"},
 		{"segment match after last slash", "claude-3-opus", "anthropic/claude-3-opus"},
 		{"segment match for gemini", "gemini-1.5-pro", "gemini/gemini-1.5-pro"},
+		{"own provider prefix stripped", "deepseek-ai/DeepSeek-V4-Flash", "nebius/deepseek-ai/DeepSeek-V4-Flash"},
+		{"foreign prefix not stripped", "deepseek-ai/DeepSeek-V4-Pro", ""},
 		{"no match", "gpt-4o", ""},
 	}
 	for _, tc := range cases {

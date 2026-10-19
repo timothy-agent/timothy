@@ -160,6 +160,10 @@ func candidatesForHost(baseURL string) []string {
 		return []string{"zai"}
 	case host == "api.x.ai":
 		return []string{"xai"}
+	case host == "api.deepseek.com":
+		return []string{"deepseek"}
+	case host == "api.tokenfactory.nebius.com" || host == "api.studio.nebius.com":
+		return []string{"nebius"}
 	case host == "openrouter.ai":
 		return []string{"openrouter"}
 	case host == "localhost" || host == "127.0.0.1" || host == "host.docker.internal" || u.Port() == "11434":
@@ -170,11 +174,17 @@ func candidatesForHost(baseURL string) []string {
 }
 
 // Match finds model_key's exact match: first against the full key,
-// then against the segment after the last "/" — first match wins, no
+// then without its own provider prefix (nebius/org/model -> org/model),
+// then against the segment after the last "/". First match wins, no
 // fuzzy matching. Empty string means no match.
 func Match(modelID string, pool []Model) string {
 	for _, m := range pool {
 		if m.ModelKey == modelID {
+			return m.ModelKey
+		}
+	}
+	for _, m := range pool {
+		if StripOwnPrefix(m.ModelKey, m.LitellmProvider) == modelID {
 			return m.ModelKey
 		}
 	}
