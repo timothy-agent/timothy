@@ -43,7 +43,7 @@ type pgxQuerier interface {
 // the gateway never builds a chat driver for at all.
 var drivers = map[string]bool{
 	"anthropic": true, "openaicompat": true, "bedrock": true,
-	"laya": true, "jev": true,
+	"jev": true,
 }
 
 // cliDrivers whitelists driver names valid on a kind='cli' provider

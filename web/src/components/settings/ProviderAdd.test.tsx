@@ -1141,44 +1141,18 @@ describe('ProviderAdd subscription connect', () => {
 })
 
 describe('ProviderAdd decision-model presets', () => {
-  it('renders Laya preset with visible Base URL and tests via decide probe', async () => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 42, model: 'typed-decisions' })
-    vi.mocked(createProvider).mockResolvedValue('laya-id')
-    renderPage('laya')
-
-    expect(await screen.findByDisplayValue('Laya')).toBeInTheDocument()
-    const urlInput = screen.getByLabelText('Base URL')
-    expect(urlInput).toBeInTheDocument()
-    expect(urlInput).toHaveValue('http://laya:8000')
-    expect(screen.getByText('validated with a decide probe, becomes the default')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('typed-decisions')).toBeInTheDocument()
-
-    // Test connection
-    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
-    await waitFor(() =>
-      expect(validateProvider).toHaveBeenCalledWith(
-        expect.objectContaining({
-          driver: 'laya',
-          base_url: 'http://laya:8000',
-        }),
-        'typed-decisions',
-      ),
+  it('offers no Laya preset: its add route redirects to the provider list', async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/settings/providers/new/laya']}>
+          <Routes>
+            <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
+            <Route path="/settings/providers" element={<p>provider list</p>} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
     )
-
-    // Add provider
-    const addBtn = await screen.findByRole('button', { name: 'Add provider' })
-    expect(addBtn).toBeEnabled()
-    fireEvent.click(addBtn)
-    await waitFor(() =>
-      expect(createProvider).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'Laya',
-          driver: 'laya',
-          base_url: 'http://laya:8000',
-          default_model: 'typed-decisions',
-        }),
-      ),
-    )
+    expect(await screen.findByText('provider list')).toBeInTheDocument()
   })
 
   it('renders TypeSafe Jev preset with credential_ref and tests via decide probe', async () => {

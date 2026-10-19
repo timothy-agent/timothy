@@ -21,7 +21,6 @@ func TestBuildRegistry(t *testing.T) {
 		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                             // #nosec G101
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
 		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", CredentialRef: "bedrock-static"},
-		{Name: "laya", Kind: KindAPI, Driver: "laya", BaseURL: "http://laya:8000"},
 		{Name: "jev", Kind: KindAPI, Driver: "jev", CredentialRef: "JEV_API_KEY"}, // #nosec G101
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {
@@ -37,13 +36,6 @@ func TestBuildRegistry(t *testing.T) {
 	}
 	if _, ok := r.Get("bedrock"); !ok {
 		t.Fatal("bedrock missing")
-	}
-	l, ok := r.Get("laya")
-	if !ok || l.Name() != "laya" {
-		t.Fatal("laya missing")
-	}
-	if layaProv, ok := l.(*SystemOne); !ok || layaProv.preset.driver != "laya" {
-		t.Fatalf("laya provider = %T, want *SystemOne with the laya preset", l)
 	}
 	j, ok := r.Get("jev")
 	if !ok || j.Name() != "jev" {
@@ -62,8 +54,8 @@ func TestBuildRegistry(t *testing.T) {
 	if _, ok := r.Get("nope"); ok {
 		t.Fatal("unknown name resolved")
 	}
-	if got := len(r.Names()); got != 5 {
-		t.Fatalf("Names() = %d, want 5", got)
+	if got := len(r.Names()); got != 4 {
+		t.Fatalf("Names() = %d, want 4", got)
 	}
 }
 
@@ -125,6 +117,11 @@ func TestBuildErrors(t *testing.T) {
 		{
 			name:    "legacy openai-responses driver",
 			cfgs:    []Config{{Name: "p", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1"}},
+			wantErr: "unknown driver",
+		},
+		{
+			name:    "removed laya driver",
+			cfgs:    []Config{{Name: "p", Driver: "laya", BaseURL: "http://laya:8000"}},
 			wantErr: "unknown driver",
 		},
 		{

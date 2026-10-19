@@ -14,7 +14,7 @@ import (
 )
 
 // SystemOneConfig configures one decision-model provider instance that
-// speaks the POST /v1/systemone wire (laya and jev drivers, D-163).
+// speaks the POST /v1/systemone wire (the jev driver, D-163).
 type SystemOneConfig struct {
 	Name    string
 	BaseURL string // /v1 and /v1/systemone suffixes are accepted

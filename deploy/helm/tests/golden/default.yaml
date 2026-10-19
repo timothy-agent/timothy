@@ -257,15 +257,6 @@ spec:
               app.kubernetes.io/component: postgres
       ports:
         - {protocol: TCP, port: 5432}
-    - to:
-        -
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: timothy
-              app.kubernetes.io/instance: timothy
-              app.kubernetes.io/component: laya
-      ports:
-        - {protocol: TCP, port: 8000}
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # memoryd: from brain; to gateway and postgres.
@@ -577,46 +568,6 @@ spec:
               app.kubernetes.io/name: timothy
               app.kubernetes.io/instance: timothy
               app.kubernetes.io/component: brain
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - {protocol: UDP, port: 53}
-        - {protocol: TCP, port: 53}
----
-# Source: timothy/templates/networkpolicy.yaml
-# laya: from gateway; no egress beyond DNS.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: timothy-laya
-  namespace: timothy
-  labels:
-    app.kubernetes.io/name: timothy
-    app.kubernetes.io/instance: timothy
-    app.kubernetes.io/version: "0.1.0-alpha.108"
-    app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: timothy-0.1.0
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: timothy
-      app.kubernetes.io/instance: timothy
-      app.kubernetes.io/component: laya
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        -
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: timothy
-              app.kubernetes.io/instance: timothy
-              app.kubernetes.io/component: gateway
   egress:
     - to:
         - namespaceSelector:
@@ -943,23 +894,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: timothy-0.1.0
     app.kubernetes.io/component: whisper
-# Only sandboxd talks to the API server; every other pod also sets
-# automountServiceAccountToken false on the pod.
-automountServiceAccountToken: false
----
-# Source: timothy/templates/serviceaccounts.yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: timothy-laya
-  namespace: timothy
-  labels:
-    app.kubernetes.io/name: timothy
-    app.kubernetes.io/instance: timothy
-    app.kubernetes.io/version: "0.1.0-alpha.108"
-    app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: timothy-0.1.0
-    app.kubernetes.io/component: laya
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
@@ -1374,29 +1308,6 @@ spec:
   ports:
     - name: http
       port: 8001
-      targetPort: http
----
-# Source: timothy/templates/sidecars.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: timothy-laya
-  namespace: timothy
-  labels:
-    app.kubernetes.io/name: timothy
-    app.kubernetes.io/instance: timothy
-    app.kubernetes.io/version: "0.1.0-alpha.108"
-    app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: timothy-0.1.0
-    app.kubernetes.io/component: laya
-spec:
-  selector:
-    app.kubernetes.io/name: timothy
-    app.kubernetes.io/instance: timothy
-    app.kubernetes.io/component: laya
-  ports:
-    - name: http
-      port: 8000
       targetPort: http
 ---
 # Source: timothy/templates/web.yaml
@@ -2239,79 +2150,6 @@ spec:
             requests:
               cpu: 500m
               memory: 4Gi
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-      volumes:
-        - name: tmp
-          emptyDir: {}
----
-# Source: timothy/templates/sidecars.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: timothy-laya
-  namespace: timothy
-  labels:
-    app.kubernetes.io/name: timothy
-    app.kubernetes.io/instance: timothy
-    app.kubernetes.io/version: "0.1.0-alpha.108"
-    app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: timothy-0.1.0
-    app.kubernetes.io/component: laya
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: timothy
-      app.kubernetes.io/instance: timothy
-      app.kubernetes.io/component: laya
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: timothy
-        app.kubernetes.io/instance: timothy
-        app.kubernetes.io/component: laya
-    spec:
-      serviceAccountName: timothy-laya
-      automountServiceAccountToken: false
-      
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534
-        runAsGroup: 65534
-        fsGroup: 65534
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: laya
-          image: ghcr.io/timothy-agent/timothy-laya:0.1.0-alpha.108
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-          ports:
-            - name: http
-              containerPort: 8000
-          readinessProbe:
-            httpGet: {path: /health, port: http}
-            periodSeconds: 10
-            timeoutSeconds: 5
-          livenessProbe:
-            httpGet: {path: /health, port: http}
-            initialDelaySeconds: 120
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          resources:
-            limits:
-              cpu: "2"
-              memory: 2Gi
-            requests:
-              cpu: 100m
-              memory: 256Mi
           volumeMounts:
             - name: tmp
               mountPath: /tmp

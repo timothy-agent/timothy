@@ -208,8 +208,9 @@ func TestValidateProviderCLIKind(t *testing.T) {
 				Options: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
 		},
 		{
-			name: "laya decision driver passes",
-			p:    Provider{Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: "http://laya:8000"},
+			name:    "removed laya driver rejected",
+			p:       Provider{Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: "http://laya:8000"},
+			wantErr: "unknown driver",
 		},
 		{
 			name: "jev decision driver passes",

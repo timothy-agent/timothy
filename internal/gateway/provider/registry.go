@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Name          string
 	Kind          Kind
-	Driver        string // "anthropic" | "openaicompat" | "bedrock" | "laya" | "jev"
+	Driver        string // "anthropic" | "openaicompat" | "bedrock" | "jev"
 	BaseURL       string
 	CredentialRef string
 	Headers       map[string]string
@@ -114,14 +114,6 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				cfg.StaticCredentials = sc
 			}
 			p = NewBedrock(cfg)
-		case "laya":
-			if c.BaseURL == "" {
-				return nil, fmt.Errorf("registry: provider %q: laya requires base_url", c.Name)
-			}
-			p = NewLaya(SystemOneConfig{
-				Name: c.Name, BaseURL: c.BaseURL,
-				Headers: c.Headers, Timeout: c.Timeout,
-			})
 		case "jev":
 			p = NewJev(SystemOneConfig{
 				Name: c.Name, BaseURL: c.BaseURL, APIKey: key,
