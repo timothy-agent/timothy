@@ -1,6 +1,19 @@
 # Serves the built SPA and proxies /v1 to brain. Only ${BRAIN_URL} is
 # substituted at container start (set env vars stay, nginx runtime
 # variables like $uri pass through untouched).
+
+# The app shell must revalidate on every load, or a browser keeps the
+# previous build after a deploy and calls API routes that no longer
+# exist. Vite content-hashes everything under /assets/, so those never
+# change. An empty value sends no header, leaving /v1/ and /health to
+# brain.
+map $uri $timothy_cache_control {
+    ~^/assets/  "public, max-age=31536000, immutable";
+    ~^/v1/      "";
+    /health     "";
+    default     "no-cache";
+}
+
 server {
     listen 8080;
     server_name _;
@@ -23,6 +36,7 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Cache-Control $timothy_cache_control;
 
     # SPA: unknown paths fall back to the app shell.
     location / {
