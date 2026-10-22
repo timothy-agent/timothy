@@ -59,15 +59,17 @@ const modelHintKey = 'timothy.model_hint'
 const transcriptPageSize = 200
 const catchUpPageSize = 500
 
+const noop = () => {}
+
 export function Chat({
-  onNeedToken,
+  onNeedToken = noop,
   basePath = '/chat',
   lockedSkillHint,
   emptyHeading = 'What can I help with?',
   emptySubtext = 'Ask anything. The agent picker chooses who serves you.',
   placeholder,
 }: {
-  onNeedToken: () => void
+  onNeedToken?: () => void
   // Route prefix for session-id adoption (e.g. "/research" for the
   // locked research page): kept in sync with the <Route> that mounts
   // this component so mid-stream URL adoption lands on the right page.

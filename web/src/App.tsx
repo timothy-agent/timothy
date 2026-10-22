@@ -1,12 +1,11 @@
-import { Bot, ChartColumn, ChevronRight, House, KeyRound, Library, LogOut, MessageCircle, Moon, Repeat, Rocket, Search, Settings as SettingsIcon, Sun } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Bot, ChartColumn, ChevronRight, House, Library, LogOut, MessageCircle, Moon, Repeat, Rocket, Search, Settings as SettingsIcon, Sun } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
-import { backendVersion, loginExpiredMessage, subscribeLoginExpired, subscribeNeedToken } from './api/client'
+import { backendVersion, loginExpiredMessage, subscribeLoginExpired } from './api/client'
 import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
-import { SettingsDialog } from './components/SettingsDialog'
 import { ConnectorLogoSprite } from './components/settings/ConnectorLogo'
 import { LogoSprite } from './components/timothy/provider-logo'
 import {
@@ -137,13 +136,11 @@ function AppSidebar({
   pendingPermissions,
   theme,
   onCycleTheme,
-  onToken,
 }: {
   pendingMemories: number
   pendingPermissions: number
   theme: Theme
   onCycleTheme: () => void
-  onToken: () => void
 }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
@@ -258,12 +255,6 @@ function AppSidebar({
             <SidebarMenuButton onClick={onCycleTheme} tooltip={themeLabel[theme]}>
               <ThemeIcon />
               <span>{themeLabel[theme]}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={onToken} tooltip="API token">
-              <KeyRound />
-              <span>API token</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           {user && (
@@ -439,26 +430,12 @@ function AuthRedirect() {
 }
 
 function App() {
-  const [tokenOpen, setTokenOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [theme, setThemeState] = useState<Theme>(() => getTheme())
   const pendingMemories = usePendingMemories()
   const pendingPermissions = usePendingPermissions()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-
-  useEffect(() => {
-    let lastToast = 0
-    return subscribeNeedToken(() => {
-      setTokenOpen(true)
-      const now = Date.now()
-      if (now - lastToast < 4000) return
-      lastToast = now
-      toast.error("Timothy's API token is missing or invalid", {
-        description: 'Paste TIMOTHY_API_TOKEN from deploy/.env. This is not an LLM provider key.',
-      })
-    })
-  }, [])
 
   // One sticky toast however many calls fail: the fixed id makes sonner
   // update it in place instead of stacking copies.
@@ -527,9 +504,6 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Stable identity: Chat's resume effect depends on it.
-  const openToken = useCallback(() => setTokenOpen(true), [])
-
   const cycleTheme = () => {
     const t = nextTheme[theme]
     setTheme(t)
@@ -551,10 +525,7 @@ function App() {
             ) : pathname === '/login' ? (
               <Login />
             ) : pathname === '/welcome' ? (
-              <>
-                <Welcome />
-                <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
-              </>
+              <Welcome />
             ) : (
               <SidebarProvider className="min-h-dvh">
               <AppSidebar
@@ -562,7 +533,6 @@ function App() {
                 pendingPermissions={pendingPermissions.filter((p) => p.origin_kind === 'chat').length}
                 theme={theme}
                 onCycleTheme={cycleTheme}
-                onToken={openToken}
               />
               <SidebarInset className="min-w-0 bg-dot-grid">
                 <TopBar onOpenPalette={() => setPaletteOpen(true)} />
@@ -577,7 +547,7 @@ function App() {
                       path="/chat/:id?"
                       element={
                         <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
-                          <Chat onNeedToken={openToken} />
+                          <Chat />
                         </div>
                       }
                     />
@@ -585,7 +555,7 @@ function App() {
                       path="/research/:id?"
                       element={
                         <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
-                          <Research onNeedToken={openToken} />
+                          <Research />
                         </div>
                       }
                     />
@@ -622,7 +592,6 @@ function App() {
                     <Route path="/design" element={<DesignSystem />} />
                   </Routes>
                 </div>
-                <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
               </SidebarInset>
             </SidebarProvider>
           )}
