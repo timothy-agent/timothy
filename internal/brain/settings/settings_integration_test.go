@@ -349,6 +349,31 @@ func TestGitStrategySettings(t *testing.T) {
 	}
 }
 
+func TestWebSearchProviderSettingIntegration(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	if got := s.WebSearchProvider(ctx); got != "" {
+		t.Fatalf("WebSearchProvider default = %q, want empty", got)
+	}
+
+	for _, valid := range []string{"tavily", "searxng"} {
+		if err := s.SetValue(ctx, ValueWebSearchProvider, valid); err != nil {
+			t.Fatalf("SetValue %q: %v", valid, err)
+		}
+		if got := s.WebSearchProvider(ctx); got != valid {
+			t.Fatalf("WebSearchProvider after set = %q, want %q", got, valid)
+		}
+	}
+
+	if err := s.SetValue(ctx, ValueWebSearchProvider, ""); err != nil {
+		t.Fatalf("SetValue clear: %v", err)
+	}
+	if got := s.WebSearchProvider(ctx); got != "" {
+		t.Fatalf("WebSearchProvider after clear = %q, want empty", got)
+	}
+}
+
 // TestTimezoneSetting covers Location's fallback to UTC (unset, and a
 // stale/invalid stored value) and its use of the stored IANA name once
 // validated on write.

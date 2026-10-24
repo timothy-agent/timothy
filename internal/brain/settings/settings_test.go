@@ -34,6 +34,23 @@ func TestOutboundHostsDefaultsToNone(t *testing.T) {
 	}
 }
 
+func TestWebSearchProviderSetting(t *testing.T) {
+	s := degradedStore(t)
+	ctx := context.Background()
+	if got := s.WebSearchProvider(ctx); got != "" {
+		t.Fatalf("WebSearchProvider() = %q, want empty", got)
+	}
+	if !knownValueKeys[ValueWebSearchProvider] {
+		t.Fatal("ValueWebSearchProvider missing from knownValueKeys")
+	}
+
+	for _, invalid := range []string{"bing", "google", "Tavily", "SEARXNG", "unknown"} {
+		if err := s.SetValue(ctx, ValueWebSearchProvider, invalid); err == nil {
+			t.Errorf("SetValue(%q) succeeded, want validation error", invalid)
+		}
+	}
+}
+
 // TestKBImageCaptioningDefaultsOff confirms the one knownKeysOff
 // switch defaults to false for an absent row / degraded database,
 // unlike every other known switch which defaults to true: enabling

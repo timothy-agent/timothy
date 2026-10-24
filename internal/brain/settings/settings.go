@@ -222,6 +222,10 @@ const (
 	// in seconds (issue #830); "" or "0" defers to
 	// DefaultEmailPollSeconds, values under MinEmailPollSeconds floor.
 	ValueEmailPollSeconds = "email_poll_seconds"
+	// ValueWebSearchProvider selects the backend provider for the
+	// search_web tool ("tavily" or "searxng"); "" (the default) auto-selects
+	// Tavily when configured, falling back to SearXNG.
+	ValueWebSearchProvider = "web_search_provider"
 )
 
 // DefaultGitHubPollSeconds is the GitHub event poller's interval when
@@ -293,6 +297,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
 	ValueMissionMaxChainDepth: true,
 	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
+	ValueWebSearchProvider: true,
 }
 
 // KeyOnboarding holds the setup checklist and tour progress as one
@@ -584,6 +589,12 @@ func (s *Store) WebBaseURL(ctx context.Context) string {
 	return s.Value(ctx, ValueWebBaseURL)
 }
 
+// WebSearchProvider returns the configured web search provider ("tavily"
+// or "searxng"), "" (auto) when unset.
+func (s *Store) WebSearchProvider(ctx context.Context) string {
+	return s.Value(ctx, ValueWebSearchProvider)
+}
+
 // WritingStyle returns the operator's configured writing rules, ""
 // when unset (no writing-style block in prompts).
 func (s *Store) WritingStyle(ctx context.Context) string {
@@ -755,6 +766,11 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 	if key == ValueTimezone && value != "" {
 		if _, err := time.LoadLocation(value); err != nil {
 			return fmt.Errorf("%s: unknown IANA timezone %q", key, value)
+		}
+	}
+	if key == ValueWebSearchProvider && value != "" {
+		if value != "tavily" && value != "searxng" {
+			return fmt.Errorf("%s: must be tavily, searxng, or empty, got %q", key, value)
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)
