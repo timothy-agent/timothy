@@ -92,6 +92,23 @@ func (b *builtinToolSet) add(t ...*tools.Tool) []*tools.Tool {
 	return append([]*tools.Tool(nil), b.tools...)
 }
 
+func (b *builtinToolSet) replaceOrAdd(t *tools.Tool) []*tools.Tool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	found := false
+	for i, existing := range b.tools {
+		if existing.Name == t.Name {
+			b.tools[i] = t
+			found = true
+			break
+		}
+	}
+	if !found {
+		b.tools = append(b.tools, t)
+	}
+	return append([]*tools.Tool(nil), b.tools...)
+}
+
 func (b *builtinToolSet) snapshot() []*tools.Tool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -224,8 +241,9 @@ func main() {
 	mc := memclient.New(memorydURL)
 
 	searxngURL := os.Getenv("SEARXNG_URL")
-	if searxngURL == "" {
-		app.Log.Warn("SEARXNG_URL not set; web search tool is unavailable")
+	tavilyEnvKey := strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
+	if searxngURL == "" && tavilyEnvKey == "" {
+		app.Log.Warn("SEARXNG_URL and TAVILY_API_KEY not set; web search tool requires TAVILY_API_KEY in Settings")
 	}
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
 	if markitdownURL == "" {
@@ -325,6 +343,28 @@ func main() {
 	if secrets != nil {
 		resolveSecret = secrets.Resolve
 		go runSecretResealSweep(ctx, app.DB, secrets, app.Log)
+	}
+
+	webSearchTool := builtin.WebSearchWithConfig(builtin.WebSearchConfig{
+		SearxngURL: searxngURL,
+		TavilyAPIKey: func(ctx context.Context) string {
+			if resolveSecret != nil {
+				if k, err := resolveSecret(ctx, "TAVILY_API_KEY"); err == nil && strings.TrimSpace(k) != "" {
+					return strings.TrimSpace(k)
+				}
+			}
+			return tavilyEnvKey
+		},
+		Provider: func(ctx context.Context) string {
+			return flags.Value(ctx, settings.ValueWebSearchProvider)
+		},
+	})
+	current := builtinSet.replaceOrAdd(webSearchTool)
+	if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+		app.Log.Warn("web search tool registration failed; agent keeps its previous tool surface", "error", err)
+	} else {
+		agent.SwapTools(constrained, defs)
+		agent.SetBaseTools(constrained, defs)
 	}
 
 	// Channels (issue #828): Telegram long polling, so nothing inbound

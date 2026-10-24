@@ -80,13 +80,13 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `sandboxd`   | Internal service running per-mission sandboxes: Docker containers on Compose, pods on Kubernetes  |
 | `cliproxy`   | Internal proxy: wraps ChatGPT Plus/Pro and Claude subscriptions into OpenAI-compatible API on :8317 |
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                       |
-| `searxng`    | Internal metasearch backend for `search_web` (profile `search`, `full`)                           |
+| `searxng`    | Internal metasearch backend for `search_web` (profile `search`, `full`; Tavily also supported)     |
 | `markitdown` | Internal Python sidecar: file→markdown conversion (profile `docs`, `full`)                        |
 | `ocr`        | Internal Python sidecar: tesseract image OCR (profile `docs`, `full`)                             |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (profile `whisper`, `full`)  |
 | `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst for chat, mission export (profile `docs`, `full`) |
 
-Timothy defaults to a lightweight core footprint (~300–500 MiB RAM: `brain`, `gateway`, `memoryd`, `sandboxd`, `cliproxy`, `web`, `postgres`). Heavy Python sidecars and SearXNG run under opt-in Compose profiles (`search`, `docs`, `whisper`, or `full` to enable all; ~6–10 GiB RAM total).
+Timothy defaults to a lightweight core footprint (~300–500 MiB RAM: `brain`, `gateway`, `memoryd`, `sandboxd`, `cliproxy`, `web`, `postgres`). Heavy Python sidecars and SearXNG run under opt-in Compose profiles (`search`, `docs`, `whisper`, or `full` to enable all; ~6–10 GiB RAM total). Web search also natively supports Tavily as a cloud backend without running the SearXNG sidecar.
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`; brain's `/metrics`, the only one on a published port, requires `Authorization: Bearer $TIMOTHY_METRICS_TOKEN`.
 
