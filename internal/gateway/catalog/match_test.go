@@ -47,6 +47,7 @@ func TestMatch(t *testing.T) {
 		{ModelKey: "anthropic/claude-3-opus"},
 		{ModelKey: "gemini/gemini-1.5-pro"},
 		{ModelKey: "nebius/deepseek-ai/DeepSeek-V4-Flash", LitellmProvider: "nebius"},
+		{ModelKey: "nebius/nvidia/nemotron-3-super-120b-a12b", LitellmProvider: "nebius"},
 		{ModelKey: "other/deepseek-ai/DeepSeek-V4-Pro", LitellmProvider: "nebius"},
 	}
 	cases := []struct {
@@ -59,6 +60,7 @@ func TestMatch(t *testing.T) {
 		{"segment match after last slash", "claude-3-opus", "anthropic/claude-3-opus"},
 		{"segment match for gemini", "gemini-1.5-pro", "gemini/gemini-1.5-pro"},
 		{"own provider prefix stripped", "deepseek-ai/DeepSeek-V4-Flash", "nebius/deepseek-ai/DeepSeek-V4-Flash"},
+		{"nebius nvidia nemotron prefix stripped", "nvidia/nemotron-3-super-120b-a12b", "nebius/nvidia/nemotron-3-super-120b-a12b"},
 		{"foreign prefix not stripped", "deepseek-ai/DeepSeek-V4-Pro", ""},
 		{"no match", "gpt-4o", ""},
 	}

@@ -161,7 +161,7 @@ describe('Help', () => {
 })
 
 describe('API token dialog', () => {
-  it('opens when a request is unauthorized', async () => {
+  it('does not open the legacy API token dialog when a request is unauthorized', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -172,8 +172,7 @@ describe('API token dialog', () => {
       ),
     )
     renderAt('/settings/providers')
-    expect(await screen.findByLabelText('API token')).toBeTruthy()
-    expect(screen.getByText(/not an LLM provider API key/)).toBeTruthy()
+    expect(screen.queryByLabelText('API token')).toBeNull()
   })
 })
 

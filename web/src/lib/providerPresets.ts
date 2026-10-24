@@ -88,6 +88,21 @@ export const awsRegions: { value: string; label: string }[] = [
 
 export const providerPresets: ProviderPreset[] = [
   {
+    id: 'nebius',
+    name: 'Nebius',
+    driver: 'openaicompat',
+    description: 'Open models on Nebius Token Factory',
+    logo: 'nebius',
+    brandColor: '#052B42',
+    baseURL: 'https://api.tokenfactory.nebius.com/v1',
+    requiresKey: true,
+    defaultRef: 'NEBIUS_API_KEY',
+    keyPlaceholder: 'paste key',
+    keyHint: 'Create one at tokenfactory.nebius.com.',
+    keyURL: 'https://tokenfactory.nebius.com',
+    validateModel: 'nvidia/nemotron-3-super-120b-a12b',
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     driver: 'openaicompat',
@@ -228,21 +243,6 @@ export const providerPresets: ProviderPreset[] = [
     keyHint: 'Create one at platform.deepseek.com, keys start with sk-.',
     keyURL: 'https://platform.deepseek.com/api_keys',
     validateModel: 'deepseek-flash',
-  },
-  {
-    id: 'nebius',
-    name: 'Nebius',
-    driver: 'openaicompat',
-    description: 'Open models on Nebius Token Factory',
-    logo: 'nebius',
-    brandColor: '#052B42',
-    baseURL: 'https://api.tokenfactory.nebius.com/v1',
-    requiresKey: true,
-    defaultRef: 'NEBIUS_API_KEY',
-    keyPlaceholder: 'paste key',
-    keyHint: 'Create one at tokenfactory.nebius.com.',
-    keyURL: 'https://tokenfactory.nebius.com',
-    validateModel: 'deepseek-ai/DeepSeek-V4-Flash',
   },
   {
     id: 'ollama',

@@ -78,6 +78,7 @@ describe('Welcome', () => {
       .map((b) => b.textContent ?? '')
       .filter((t) => t !== 'Skip for now')
     const titles = [
+      'Nebius',
       'Free to start (OpenRouter)',
       'Local model (Ollama)',
       'OpenAI',
@@ -85,15 +86,15 @@ describe('Welcome', () => {
       'GLM (Z.ai)',
       'Grok (xAI)',
       'DeepSeek',
-      'Nebius',
       'AWS Bedrock',
       'Cursor',
       'Custom endpoint',
     ]
     expect(tiles).toHaveLength(titles.length)
     titles.forEach((title, i) => expect(tiles[i]).toContain(title))
-    expect(tiles[0]).toContain('One login, hundreds of models, free tier included')
-    expect(tiles[1]).toContain('Runs on your own machine, no key needed')
+    expect(tiles[0]).toContain('Open models on Nebius Token Factory')
+    expect(tiles[1]).toContain('One login, hundreds of models, free tier included')
+    expect(tiles[2]).toContain('Runs on your own machine, no key needed')
     expect(screen.getByText('You can add more providers later in Settings.')).toBeInTheDocument()
   })
 
