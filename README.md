@@ -59,12 +59,12 @@ Timothy's `gateway` decouples agent roles from specific model providers, so you 
 
 For example, running a full open-weights stack on **Nebius Token Factory** (`https://api.tokenfactory.nebius.com/v1`) with **NVIDIA Nemotron** models:
 
-| Role                  | Workload                                                       | Example model on Nebius Token Factory        |
-|-----------------------|----------------------------------------------------------------|----------------------------------------------|
-| `chat`                | Interactive assistant turns, tool calls, and research synthesis | `nvidia/nemotron-3-super-120b-a12b`          |
-| `missions` / `coding` | Multi-phase autonomous planning, sandboxed coding, verification | `nvidia/Nemotron-3-Ultra-550b-a55b`          |
-| `decide`              | Fast mission classification, kind/light routing previews        | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`      |
-| `memory`              | Background fact extraction, deduplication, and KB classification | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`      |
+| Role / route | Workload                                                                         | Example model on Nebius Token Factory   |
+|--------------|----------------------------------------------------------------------------------|-----------------------------------------|
+| `decide`     | Selects mission kind (`coding` vs `general`), light vs full mode, and auto-route | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
+| `summarize`  | Extracts background memory facts, classifies KB collections, compacts sessions   | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` |
+| `default`    | Handles interactive chat, web research, and tool calls                           | `nvidia/nemotron-3-super-120b-a12b`     |
+| `coding`     | Plans, builds, and verifies multi-phase coding and research missions             | `nvidia/Nemotron-3-Ultra-550b-a55b`     |
 
 Each route supports ordered fallback targets across providers (e.g., failing over between Nebius Token Factory, local Ollama, OpenRouter, Anthropic, or Bedrock) without changing agent or mission code.
 
