@@ -20,10 +20,11 @@ vi.mock('../../api/client', () => ({
   listRoutes: vi.fn(),
   patchSettings: vi.fn(),
   patchSettingValues: vi.fn(),
+  setSecret: vi.fn(),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
+import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues, setSecret } from '../../api/client'
 import { toast } from 'sonner'
 
 afterEach(cleanup)
@@ -34,6 +35,7 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue([])
   vi.mocked(listKbCollections).mockResolvedValue([])
   vi.mocked(patchSettingValues).mockResolvedValue(undefined)
+  vi.mocked(setSecret).mockResolvedValue(undefined)
 })
 
 function kbCollection(name: string): KbCollection {
@@ -353,5 +355,66 @@ describe('FeaturesTab timezone', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Could not save timezone', { description: 'server unavailable' }),
     )
+  })
+})
+
+describe('FeaturesTab web search', () => {
+  it('saves the provider setting and calls setSecret when key is entered', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { web_search_provider: '' },
+    })
+    renderTab()
+
+    const select = await screen.findByRole('combobox', { name: 'Web search provider' })
+    fireEvent.click(select)
+    fireEvent.click(await screen.findByRole('option', { name: 'Tavily' }))
+
+    const input = screen.getByLabelText('Tavily API key')
+    fireEvent.change(input, { target: { value: '  tvly-key-123  ' } })
+
+    const region = screen.getByRole('region', { name: 'Web search' })
+    const saveButton = within(region).getByRole('button', { name: 'Save' })
+    expect(saveButton).toBeEnabled()
+    fireEvent.click(saveButton)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('TAVILY_API_KEY', 'tvly-key-123'))
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ web_search_provider: 'tavily' }))
+    expect((input as HTMLInputElement).value).toBe('')
+  })
+
+  it('saves only the provider when key is omitted', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { web_search_provider: '' },
+    })
+    renderTab()
+
+    const select = await screen.findByRole('combobox', { name: 'Web search provider' })
+    fireEvent.click(select)
+    fireEvent.click(await screen.findByRole('option', { name: 'SearXNG' }))
+
+    const region = screen.getByRole('region', { name: 'Web search' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ web_search_provider: 'searxng' }))
+    expect(setSecret).not.toHaveBeenCalled()
+  })
+
+  it('saves only the key when provider is unchanged', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { web_search_provider: 'tavily' },
+    })
+    renderTab()
+
+    const input = await screen.findByLabelText('Tavily API key')
+    fireEvent.change(input, { target: { value: 'tvly-new-key' } })
+
+    const region = screen.getByRole('region', { name: 'Web search' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('TAVILY_API_KEY', 'tvly-new-key'))
+    expect(patchSettingValues).not.toHaveBeenCalled()
   })
 })

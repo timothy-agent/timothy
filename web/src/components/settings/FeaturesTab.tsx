@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { toast } from 'sonner'
-import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
+import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues, setSecret } from '../../api/client'
 import type { AdminRoute, KbCollection } from '../../api/types'
 import { CURRENCIES } from '../../lib/currencies'
 import { listTimezones } from '../../lib/timezones'
@@ -107,6 +107,7 @@ export function FeaturesTab() {
           />
         ))}
         {values && <SensitiveRouteCard values={values} onSaved={refresh} />}
+        {values && <WebSearchCard values={values} onSaved={refresh} />}
         {values && <TimezoneCard values={values} onSaved={refresh} />}
         {values && <PlainValueCards values={values} onSaved={refresh} />}
         {values && <WritingSamplesCard values={values} onSaved={refresh} />}
@@ -522,6 +523,71 @@ function WritingSamplesCard({ values, onSaved }: { values: Record<string, string
           aria-label="Writing samples collection"
         />
       )}
+    </SettingValueCard>
+  )
+}
+
+// WebSearchCard configures the search_web backend provider and its API key.
+function WebSearchCard({ values, onSaved }: { values: Record<string, string>; onSaved: () => void }) {
+  const baseline = values.web_search_provider ?? ''
+  const [provider, setProvider] = useState(baseline)
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const dirty = provider !== baseline || apiKey.trim() !== ''
+
+  useEffect(() => {
+    setProvider(baseline)
+  }, [baseline])
+
+  const save = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      if (apiKey.trim() !== '') {
+        await setSecret('TAVILY_API_KEY', apiKey.trim())
+      }
+      if (provider !== baseline) {
+        await patchSettingValues({ web_search_provider: provider })
+      }
+      setSaving(false)
+      setApiKey('')
+      toast.success('Saved')
+      onSaved()
+    } catch (err: unknown) {
+      setSaving(false)
+      setError(errText(err))
+    }
+  }
+
+  return (
+    <SettingValueCard
+      title="Web search"
+      description="Choose the backend provider for the search_web tool and configure credentials. Auto prefers Tavily when an API key is available, falling back to SearXNG."
+      dirty={dirty}
+      saving={saving}
+      error={error}
+      onRetry={save}
+      onSave={save}
+    >
+      <Select value={provider || UNSET} onValueChange={(v) => setProvider(v === UNSET ? '' : v)}>
+        <SelectTrigger className="h-9 w-56" aria-label="Web search provider">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={UNSET}>Auto (Tavily or SearXNG)</SelectItem>
+          <SelectItem value="tavily">Tavily</SelectItem>
+          <SelectItem value="searxng">SearXNG</SelectItem>
+        </SelectContent>
+      </Select>
+      <Input
+        type="password"
+        value={apiKey}
+        onChange={(e) => setApiKey(e.target.value)}
+        placeholder="tvly-..."
+        className="h-9 w-64"
+        aria-label="Tavily API key"
+      />
     </SettingValueCard>
   )
 }

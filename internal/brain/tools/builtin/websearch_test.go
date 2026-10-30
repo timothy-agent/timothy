@@ -230,3 +230,133 @@ func TestWebSearchRejectsInvalidCategory(t *testing.T) {
 		t.Fatal("expected an error for an invalid category")
 	}
 }
+
+func TestWebSearchTavilyParsesResults(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %q, want POST", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tvly-test-key" {
+			t.Errorf("Authorization = %q, want Bearer tvly-test-key", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", got)
+		}
+		var req tavilyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Query != "golang news" {
+			t.Errorf("query = %q, want golang news", req.Query)
+		}
+		if req.MaxResults != 5 {
+			t.Errorf("max_results = %d, want 5", req.MaxResults)
+		}
+		if req.Topic != "news" {
+			t.Errorf("topic = %q, want news", req.Topic)
+		}
+		if req.TimeRange != "week" {
+			t.Errorf("time_range = %q, want week", req.TimeRange)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[
+			{"title":"Go 1.26 Released","url":"https://go.dev/blog/go1.26","content":"Go 1.26 is out."}
+		]}`))
+	}))
+	defer srv.Close()
+
+	tool := WebSearchWithConfig(WebSearchConfig{
+		TavilyURL:    srv.URL,
+		TavilyAPIKey: func(context.Context) string { return "tvly-test-key" },
+		Provider:     func(context.Context) string { return "tavily" },
+	})
+	args, _ := json.Marshal(map[string]any{"query": "golang news", "count": 5, "category": "news", "time_range": "week"})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{"1. Go 1.26 Released", "https://go.dev/blog/go1.26", "Go 1.26 is out."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWebSearchAutoRoutingPreference(t *testing.T) {
+	t.Parallel()
+
+	tavilySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"From Tavily","url":"https://tavily.com","content":"Tavily content"}]}`))
+	}))
+	defer tavilySrv.Close()
+
+	searxSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"From SearXNG","url":"https://searxng.org","content":"SearXNG content"}]}`))
+	}))
+	defer searxSrv.Close()
+
+	// 1. Auto mode with Tavily key present -> uses Tavily.
+	tool := WebSearchWithConfig(WebSearchConfig{
+		SearxngURL:   searxSrv.URL,
+		TavilyURL:    tavilySrv.URL,
+		TavilyAPIKey: func(context.Context) string { return "tvly-key" },
+	})
+	args, _ := json.Marshal(map[string]string{"query": "test"})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute with tavily key: %v", err)
+	}
+	if !strings.Contains(out, "From Tavily") {
+		t.Fatalf("expected Tavily result in auto mode when key set, got:\n%s", out)
+	}
+
+	// 2. Auto mode with empty Tavily key -> falls back to SearXNG.
+	toolFallback := WebSearchWithConfig(WebSearchConfig{
+		SearxngURL:   searxSrv.URL,
+		TavilyURL:    tavilySrv.URL,
+		TavilyAPIKey: func(context.Context) string { return "" },
+	})
+	outFallback, err := toolFallback.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute fallback: %v", err)
+	}
+	if !strings.Contains(outFallback, "From SearXNG") {
+		t.Fatalf("expected SearXNG result when tavily key empty, got:\n%s", outFallback)
+	}
+
+	// 3. Explicit Provider "searxng" uses SearXNG even with Tavily key set.
+	toolExplicitSearx := WebSearchWithConfig(WebSearchConfig{
+		SearxngURL:   searxSrv.URL,
+		TavilyURL:    tavilySrv.URL,
+		TavilyAPIKey: func(context.Context) string { return "tvly-key" },
+		Provider:     func(context.Context) string { return "searxng" },
+	})
+	outExplicit, err := toolExplicitSearx.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute explicit searxng: %v", err)
+	}
+	if !strings.Contains(outExplicit, "From SearXNG") {
+		t.Fatalf("expected SearXNG result when provider=searxng, got:\n%s", outExplicit)
+	}
+
+	// 4. Explicit Provider "tavily" fails when key is empty.
+	toolTavilyNoKey := WebSearchWithConfig(WebSearchConfig{
+		TavilyURL:    tavilySrv.URL,
+		TavilyAPIKey: func(context.Context) string { return "" },
+		Provider:     func(context.Context) string { return "tavily" },
+	})
+	_, err = toolTavilyNoKey.Execute(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "TAVILY_API_KEY is not configured") {
+		t.Fatalf("err = %v, want TAVILY_API_KEY is not configured error", err)
+	}
+
+	// 5. Neither configured in auto mode fails.
+	toolUnconfigured := WebSearchWithConfig(WebSearchConfig{})
+	_, err = toolUnconfigured.Execute(context.Background(), args)
+	if err == nil || !strings.Contains(err.Error(), "web search is not configured") {
+		t.Fatalf("err = %v, want web search is not configured error", err)
+	}
+}

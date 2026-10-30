@@ -6,6 +6,7 @@ import "github.com/SumonMSelim/timothy/internal/brain/tools"
 // describing the tool surface (cmd/manifest). Its tools are never run:
 // Execute on a nil dependency fails.
 func Catalog() []*tools.Tool {
+	_ = WebSearchWithConfig(WebSearchConfig{})
 	return []*tools.Tool{
 		Calculator(),
 		ConvertCurrency(nil),

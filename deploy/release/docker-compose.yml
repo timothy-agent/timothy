@@ -192,6 +192,8 @@ services:
       # Compose-internal only: the model never sees this address. Empty
       # by default (search tool omitted) when the search profile is inactive.
       SEARXNG_URL: ${SEARXNG_URL:-}
+      # Tavily search API key; alternative/complement to self-hosted SearXNG.
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
       # markdown/text; compose-internal only. Empty by default when the
       # docs profile is inactive.
