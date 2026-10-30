@@ -15,7 +15,7 @@
 
 Timothy runs on your hardware and works for you around the clock. Shape agents with their own model, tools and knowledge, hand them real work, and let them chat, research, write code, read your inbox and calendar, and brief you about what matters. They remember who you are across every conversation and deliver results to your phone while you sleep. Every conversation, memory, document, and API key stays on infrastructure you control.
 
-Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to whichever model does it best, switch anytime from settings, no code changes, no lock-in.
+Use any model you want: Nebius Token Factory (NVIDIA Nemotron), Anthropic, OpenAI, Amazon Bedrock, DeepSeek, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to whichever model does it best, switch anytime from settings, no code changes, no lock-in.
 
 **Status: alpha, under active development.** 
 
@@ -25,7 +25,7 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 
 | Feature                        | What you get                                                                                                                                                                                                                                                                                                                                           |
 |--------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                                                                                                  |
+| **One assistant, every model** | Nebius Token Factory (NVIDIA Nemotron), Anthropic, OpenAI, Amazon Bedrock, DeepSeek, GLM, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, decisions, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                                     |
 | **Give it real work**          | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.                                                                                                    |
 | **Results find you**           | Any task or schedule can deliver its result to Telegram, email, a webhook, or GitHub (a pushed branch or an opened pull request) the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are.                                                                                                              |
 | **It writes code safely**      | Coding tasks run in an isolated sandbox with the toolchains each repo pins (Go, Node, Python, Java, PHP, Ruby, Rust), on their own git branch, with the work verified before you see it. It can also hand the coding work to a CLI agent you already use, Claude Code, Codex, Cursor, opencode, or pi, while keeping review and budgets in your hands. |
@@ -52,6 +52,21 @@ Things Timothy's own operator actually runs it for:
 - **Every evening at 20:00**, an expense digest lists the day's spending from your inbox; every Monday at 07:00, a week-prep note cross-references your calendar with recent email threads and flags meetings that need preparation.
 
 Each of these is a schedule, a chat message, or a one-line task. No plugins to write, no pipelines to build.
+
+## Role-based model routing
+
+Timothy's `gateway` decouples agent roles from specific model providers, so you can route high-frequency background work to fast, low-cost open models and reserve frontier reasoning models for deep missions—with automatic catalog pricing and per-call cost tracking in the ledger.
+
+For example, running a full open-weights stack on **Nebius Token Factory** (`https://api.tokenfactory.nebius.com/v1`) with **NVIDIA Nemotron** models:
+
+| Role                  | Workload                                                       | Example model on Nebius Token Factory        |
+|-----------------------|----------------------------------------------------------------|----------------------------------------------|
+| `chat`                | Interactive assistant turns, tool calls, and research synthesis | `nvidia/nemotron-3-super-120b-a12b`          |
+| `missions` / `coding` | Multi-phase autonomous planning, sandboxed coding, verification | `nvidia/Nemotron-3-Ultra-550b-a55b`          |
+| `decide`              | Fast mission classification, kind/light routing previews        | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`      |
+| `memory`              | Background fact extraction, deduplication, and KB classification | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`      |
+
+Each route supports ordered fallback targets across providers (e.g., failing over between Nebius Token Factory, local Ollama, OpenRouter, Anthropic, or Bedrock) without changing agent or mission code.
 
 ## Architecture
 

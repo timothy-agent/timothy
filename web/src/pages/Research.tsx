@@ -5,7 +5,7 @@ import { Chat } from './Chat'
 // picked from a chip) so every answer follows the same source-grounded
 // discipline — search_web + fetch_url, cited claims, a structured
 // Sources list the UI renders as its own panel.
-export function Research({ onNeedToken }: { onNeedToken: () => void }) {
+export function Research({ onNeedToken }: { onNeedToken?: () => void } = {}) {
   return (
     <Chat
       onNeedToken={onNeedToken}

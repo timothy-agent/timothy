@@ -2,7 +2,7 @@ import { providerPresets, type ProviderPreset } from '../../lib/providerPresets'
 import { ProviderLogo } from '../../components/timothy/provider-logo'
 import { Card } from '../../components/ui/card'
 
-const sourceOrder = ['openrouter', 'ollama', 'openai', 'anthropic', 'glm', 'grok', 'deepseek', 'nebius', 'bedrock', 'cursor', 'custom']
+const sourceOrder = ['nebius', 'openrouter', 'ollama', 'openai', 'anthropic', 'glm', 'grok', 'deepseek', 'bedrock', 'cursor', 'custom']
 
 const sourceCopy: Record<string, { title: string; description: string }> = {
   openrouter: { title: 'Free to start (OpenRouter)', description: 'One login, hundreds of models, free tier included' },

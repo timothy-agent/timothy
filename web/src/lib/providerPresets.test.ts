@@ -39,6 +39,11 @@ describe('matchPreset', () => {
     expect(matchPreset(provider({ base_url })).id).toBe(id)
   })
 
+  it('defaults the nebius preset validation model to nvidia nemotron', () => {
+    const nebius = providerPresets.find((p) => p.id === 'nebius')
+    expect(nebius?.validateModel).toBe('nvidia/nemotron-3-super-120b-a12b')
+  })
+
   it('falls back to custom for an unknown url', () => {
     const p = provider({ base_url: 'https://example.com/v1' })
     expect(matchPreset(p).id).toBe('custom')
