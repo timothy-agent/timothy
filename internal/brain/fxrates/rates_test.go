@@ -104,3 +104,67 @@ func TestFetchLatestSurfacesHTTPErrors(t *testing.T) {
 		t.Fatal("expected an error for a non-2xx response")
 	}
 }
+
+// canned AllRatesToday /api/v1/rates?source=USD response, trimmed —
+// verified shape (2026-11).
+const cannedFallback = `[
+	{"rate": 0.8587, "source": "USD", "target": "EUR", "time": "2026-11-01T13:43:01+00:00"},
+	{"rate": 122.1, "source": "USD", "target": "BDT", "time": "2026-11-01T13:43:01+00:00"},
+	{"rate": 153.4, "source": "USD", "target": "JPY", "time": "2026-11-01T13:43:01+00:00"},
+	{"rate": 1, "source": "USD", "target": "USD", "time": "2026-11-01T13:43:01+00:00"}
+]`
+
+func TestParseFallback(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		body    string
+		want    map[string]float64
+		wantErr bool
+	}{
+		{
+			name: "filters to wanted currencies and drops the base",
+			body: cannedFallback,
+			want: map[string]float64{"EUR": 0.8587, "BDT": 122.1},
+		},
+		{
+			name:    "ignores rows not quoted from USD",
+			body:    `[{"rate": 1.16, "source": "EUR", "target": "USD"}, {"rate": 0.86, "source": "GBP", "target": "EUR"}]`,
+			wantErr: true,
+		},
+		{
+			name:    "ignores non-positive rates",
+			body:    `[{"rate": 0, "source": "USD", "target": "EUR"}]`,
+			wantErr: true,
+		},
+		{name: "empty array", body: `[]`, wantErr: true},
+		{name: "error object", body: `{"error":"Authentication required."}`, wantErr: true},
+		{name: "malformed", body: `[{`, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, asOf, err := ParseFallback([]byte(tc.body), map[string]bool{"USD": true, "EUR": true, "BDT": true})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got rates %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseFallback: %v", err)
+			}
+			if asOf.IsZero() {
+				t.Error("asOf should not be zero")
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("rates = %v, want %v", got, tc.want)
+			}
+			for code, r := range tc.want {
+				if got[code] != r {
+					t.Errorf("%s = %v, want %v", code, got[code], r)
+				}
+			}
+		})
+	}
+}
