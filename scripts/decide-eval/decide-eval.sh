@@ -15,5 +15,5 @@ GATEWAY_URL="${GATEWAY_URL:-http://gateway:8081}"
 
 docker run --rm --network "${NETWORK}" -v "${REPO_ROOT}":/src -w /src \
   -v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
-  -e GOFLAGS=-buildvcs=false golang:1.26.9 \
+  -e GOFLAGS=-buildvcs=false golang:1.26.10 \
   go run ./scripts/decide-eval/ -dataset ./scripts/decide-eval/dataset.json -gateway-url "${GATEWAY_URL}" "$@"

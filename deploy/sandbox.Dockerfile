@@ -20,7 +20,7 @@ FROM composer:2.8.12 AS composer-dist
 # D-161 (issue #1207): mcp-bridge serves a stdio MCP server over
 # streamable HTTP in a sandboxd service container. Stdlib only, so no
 # module download; cross-compiled on the build platform.
-FROM --platform=$BUILDPLATFORM golang:1.26.9 AS mcp-bridge
+FROM --platform=$BUILDPLATFORM golang:1.26.10 AS mcp-bridge
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod ./
