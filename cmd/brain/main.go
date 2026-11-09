@@ -285,7 +285,6 @@ func main() {
 	// one table, shared by the live tool and by display conversion
 	// (Analytics, mission usage) elsewhere in this file.
 	fxStore := fxrates.NewStore(app.DB)
-	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), app.Log).Run(ctx)
 
 	// captionImage converts an image's bytes into a plain-prose
 	// description: built once and shared by the KB enricher below and
@@ -344,6 +343,20 @@ func main() {
 		resolveSecret = secrets.Resolve
 		go runSecretResealSweep(ctx, app.DB, secrets, app.Log)
 	}
+
+	// The fallback rate source is contacted only when the operator has
+	// stored fxrates.FallbackKeyRef in the secret store.
+	fxFallbackKey := func(ctx context.Context) string {
+		if resolveSecret == nil {
+			return ""
+		}
+		k, err := resolveSecret(ctx, fxrates.FallbackKeyRef)
+		if err != nil {
+			return ""
+		}
+		return k
+	}
+	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), fxFallbackKey, app.Log).Run(ctx)
 
 	webSearchTool := builtin.WebSearchWithConfig(builtin.WebSearchConfig{
 		SearxngURL: searxngURL,

@@ -30,6 +30,13 @@ const (
 	// BaseURL is open.er-api.com's USD-base latest-rates endpoint — no
 	// API key, one request returns every quote currency at once.
 	BaseURL = "https://open.er-api.com/v6/latest/USD"
+	// FallbackURL is AllRatesToday's USD-source table, tried only when
+	// BaseURL fails and the operator has stored FallbackKeyRef. It
+	// needs an API key, so it can never be the keyless default.
+	FallbackURL = "https://allratestoday.com/api/v1/rates?source=USD"
+	// FallbackKeyRef is the credential_ref holding the fallback key.
+	//nolint:gosec // G101: a ref NAME in the secret store, not a credential value.
+	FallbackKeyRef = "ALLRATESTODAY_API_KEY"
 )
 
 // apiResponse is the subset of open.er-api.com's JSON response this
@@ -105,6 +112,65 @@ func ParseLatest(body []byte, want map[string]bool) (rates map[string]float64, a
 		if r, ok := parsed.Rates[code]; ok && r > 0 {
 			out[code] = r
 		}
+	}
+	return out, time.Now().UTC().Truncate(24 * time.Hour), nil
+}
+
+// fallbackRow is one element of the fallback's JSON array. Verified
+// shape (2026-11, USD source, 163 rows covering every allowed
+// currency):
+//
+//	[{"rate": 0.8587, "source": "USD", "target": "EUR", "time": "2026-11-01T13:43:01+00:00"}, ...]
+type fallbackRow struct {
+	Rate   float64 `json:"rate"`
+	Source string  `json:"source"`
+	Target string  `json:"target"`
+}
+
+// FetchFallback fetches the USD table from the fallback source with
+// key as a bearer token, filtered to `want` like FetchLatest.
+func FetchFallback(ctx context.Context, client *http.Client, url, key string, want map[string]bool) (rates map[string]float64, asOf time.Time, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("fxrates: build fallback request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("fxrates: fallback request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, time.Time{}, fmt.Errorf("fxrates: fallback http %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("fxrates: read fallback response: %w", err)
+	}
+	return ParseFallback(body, want)
+}
+
+// ParseFallback decodes the fallback's JSON array. Rows whose source
+// is not USD are ignored, so a misrouted table can never be stored as
+// USD-base rates.
+func ParseFallback(body []byte, want map[string]bool) (rates map[string]float64, asOf time.Time, err error) {
+	var rows []fallbackRow
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return nil, time.Time{}, fmt.Errorf("fxrates: parse fallback response: %w", err)
+	}
+	out := make(map[string]float64, len(want))
+	for _, r := range rows {
+		if r.Source != "USD" || r.Target == "USD" || !want[r.Target] || r.Rate <= 0 {
+			continue
+		}
+		out[r.Target] = r.Rate
+	}
+	if len(out) == 0 {
+		return nil, time.Time{}, fmt.Errorf("fxrates: fallback response carried no usable rates")
 	}
 	return out, time.Now().UTC().Truncate(24 * time.Hour), nil
 }
