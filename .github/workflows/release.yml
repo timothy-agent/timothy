@@ -94,7 +94,7 @@ jobs:
         # root, owns it; later steps write beside the manifest.
         run: |
           mkdir -p build
-          docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.26.9 \
+          docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.26.10 \
             go run ./cmd/manifest -out build/selfdocs-manifest \
               -routes web/routes.generated.json -skills skills \
               -version "${{ steps.version.outputs.value }}"
