@@ -1554,19 +1554,12 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 }
 
-// TestFollowUpSeesCompletedTurnWhileDistillRuns pins turn durability:
-// the assistant turn must be in the log the moment the client stream
-// ends, even while distillation is still running. It also pins the
-// D-042 exclusivity boundary this same window now enforces: distill
-// runs inside persistTurn, BEFORE turnDone frees the slot (see
-// relay's drainAndPersist), so a follow-up landing in that window is
-// correctly rejected with ErrTurnInFlight rather than allowed to
-// interleave: turn "done" means the slot is free, not merely that the
-// client's stream closed. (Before D-042, this test allowed that
-// follow-up to proceed immediately; that was the old
-// always-install-fresh turnBroadcast semantics this design replaces.)
-// Once distill releases and the slot frees, the follow-up proceeds and
-// sees the completed answer, never a phantom interruption.
+// TestFollowUpSeesCompletedTurnWhileDistillRuns pins D-175: the turn
+// slot frees as soon as assistant_turn is durable, so a follow-up Chat
+// on the same session right after the first turn's done succeeds while
+// distillation is still blocked, sees the completed answer (never a
+// phantom interruption), and receives the turn_memory event afterwards
+// once distillation finishes.
 func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -1583,6 +1576,7 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 		return &session.TurnMemory{KeyFindings: []string{"late residue"}}
 	}
 	svc := New(gw, log, distill, nil, staticBudget(60_000), nil, nil, nil, nil, discard())
+	t.Cleanup(func() { svc.Shutdown(context.Background()) })
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first question"})
 	if err != nil {
@@ -1590,51 +1584,42 @@ func TestFollowUpSeesCompletedTurnWhileDistillRuns(t *testing.T) {
 	}
 	drain(t, ch)
 
-	// Distill is now blocked mid-flight; the turn must already be durable.
+	// Distill is now blocked mid-flight; the slot must already be free
+	// and the assistant_turn must already be durable.
 	select {
 	case <-distillStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("distill never started")
 	}
-	deadline := time.After(5 * time.Second)
-	for {
-		if k := log.kinds("s1"); len(k) > 0 && k[len(k)-1] == session.KindAssistantTurn {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("assistant_turn not durable while distill runs: %v", log.kinds("s1"))
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-
-	// A follow-up inside the distill window must NOT be allowed to
-	// interleave: the slot is still held (turnDone hasn't run yet).
-	if _, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"}); !errors.Is(err, ErrTurnInFlight) {
-		t.Fatalf("Chat during distill window: err = %v, want ErrTurnInFlight", err)
-	}
-	if got := log.kinds("s1"); len(got) != 3 {
-		t.Fatalf("rejected follow-up appended events: kinds = %v, want no change (still 3)", got)
-	}
-
-	close(distillRelease)
 	waitFor(t, func() bool { return !svc.TurnActive("s1") })
+	if k := log.kinds("s1"); len(k) == 0 || k[len(k)-1] != session.KindAssistantTurn {
+		t.Fatalf("assistant_turn not durable while distill runs: %v", k)
+	}
 
-	// Now that the slot is free, the follow-up proceeds and sees the
-	// completed answer, never a phantom interruption.
+	// Follow-up inside the distill window succeeds right away and sees
+	// the completed first answer, never a phantom interruption.
+	gw.mu.Lock()
+	gw.events = okEvents("second answer")
+	gw.mu.Unlock()
 	_, ch2, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second question"})
 	if err != nil {
-		t.Fatalf("Chat 2: %v", err)
+		t.Fatalf("Chat 2 during distill window: %v", err)
 	}
 	drain(t, ch2)
 
-	msgs := fmt.Sprint(gw.lastRequest().Messages)
+	msgs := fmt.Sprint(gw.lastChatRequest().Messages)
 	if !strings.Contains(msgs, "the full answer") {
 		t.Fatalf("completed answer missing from follow-up context: %s", msgs)
 	}
 	if strings.Contains(msgs, "interrupted") {
 		t.Fatalf("phantom interruption in follow-up context: %s", msgs)
 	}
+
+	// Once distill releases, the turn_memory event lands afterwards.
+	close(distillRelease)
+	waitFor(t, func() bool {
+		return slices.Contains(log.kinds("s1"), session.KindTurnMemory)
+	})
 }
 
 func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {

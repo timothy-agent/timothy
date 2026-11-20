@@ -128,6 +128,10 @@ const (
 	// compaction pass so a slow extraction degrades to empty facts
 	// instead of starving the summarize.
 	preCompactExtractBudget = 45 * time.Second
+	// postTurnDrain bounds how long shutdown waits for chat post-turn
+	// work (D-175) before cancelling it: all of it is optional or
+	// retried on the session's next turn.
+	postTurnDrain = 5 * time.Second
 	// connectorReadyWait bounds how long a turn waits at entry for the
 	// first connector load (D-043): long enough to absorb the DB pool
 	// warming at boot, short enough that a turn never meaningfully hangs
@@ -904,7 +908,7 @@ func main() {
 			return
 		}
 		deny := extractDeny(ctx)
-		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
+		ectx, cancel := context.WithTimeout(ctx, extractBudget)
 		defer cancel()
 		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat", deny, injectedMemories); err != nil {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
@@ -1286,8 +1290,12 @@ func main() {
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags),
 		authStore, authKeyPair)
 
-	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		app.Log.Error("server exited", "error", err)
+	runErr := app.Run(ctx)
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), postTurnDrain)
+	svc.Shutdown(drainCtx)
+	cancelDrain()
+	if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) {
+		app.Log.Error("server exited", "error", runErr)
 		os.Exit(1)
 	}
 }
