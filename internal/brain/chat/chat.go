@@ -106,8 +106,8 @@ type Compactor interface {
 }
 
 // MemoryExtract posts one turn's text to memoryd for long-term memory
-// extraction. Fire-and-forget from chat's view: chat invokes it on a
-// goroutine, the wrapper owns timeout and error logging, and no
+// extraction. Fire-and-forget from chat's view: chat invokes it from
+// the post-turn job (D-175), the wrapper owns timeout and error logging, and no
 // failure may touch the user-facing turn. route is "" for the normal
 // side-call route, or the sensitive route pin when the turn executed a
 // sensitive tool (see Service.sensitive). recalled carries the memory
@@ -212,6 +212,12 @@ type Service struct {
 	// the only one).
 	turnsMu sync.Mutex
 	turns   map[string]*turnBroadcaster
+
+	// post runs each completed turn's side work after the slot frees;
+	// compactLocks keeps the pre-send and post-turn compaction passes
+	// of one session from overlapping (D-175, postturn.go).
+	post         postTurnQueue
+	compactLocks keyedLock
 
 	publishSession    func(sessionID string) // nil: no session-signal push (today's default)
 	publishPermission func(sessionID string) // nil: no permission-signal push (today's default)
@@ -1365,6 +1371,13 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	turnCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.turnTimeout)
 	bc.setCancel(cancel)
 
+	if s.compactor != nil {
+		if err := s.waitCompact(turnCtx, sessionID); err != nil {
+			s.turnDone(sessionID)
+			return sessionID, nil, err
+		}
+	}
+
 	if _, err := s.log.Append(turnCtx, sessionID, session.KindUserMessage, session.UserMessage{
 		Text: req.Message, Route: route, Agent: profile.ID, ModelHint: modelHint, RoutePick: routePick, Images: images, Documents: documents,
 	}); err != nil {
@@ -1656,10 +1669,11 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// stays under budget even on the turn that crosses it. The
 	// post-turn pass below keeps sessions compacted ahead of time, so
 	// this is a cheap no-op except on the crossing turn; best-effort:
-	// an oversized context beats no answer.
+	// an oversized context beats no answer. It waits for a post-turn
+	// pass still running on this session (D-175).
 	if s.compactor != nil {
 		cctx, cancel := context.WithTimeout(turnCtx, compactBudget)
-		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
+		if err := s.compact(cctx, sessionID); err != nil {
 			s.logger.Warn("pre-send compaction", "session_id", sessionID, "error", err)
 		}
 		cancel()
@@ -1974,7 +1988,12 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs, memoryContents)
+		post := s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs, memoryContents)
+		// Queued before the slot frees, so this turn's side work is
+		// always ahead of the next turn's in the session's queue (D-175).
+		if post != nil && !s.post.enqueue(sessionID, post) {
+			s.logger.Warn("post-turn work dropped: shutting down", "session_id", sessionID)
+		}
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order: mirrors missions.Store's own "publish only after
@@ -2044,7 +2063,11 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef, memoryContents []string) {
+// persistTurn makes the turn's terminal event durable and returns the
+// post-turn job to queue (D-175), or nil when the turn did not complete
+// with an assistant_turn: abnormal ends and empty responses have no
+// side work.
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef, memoryContents []string) func(context.Context) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -2055,7 +2078,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 			if _, err := s.log.Append(ctx, sessionID, session.KindPendingState, session.PendingState{Partial: text}); err != nil {
 				s.logger.Error("persist pending state", "session_id", sessionID, "error", err)
 			}
-			return
+			return nil
 		}
 		// No partial worth keeping: a captured terminal error/incomplete
 		// (D-044) becomes durable evidence instead of the turn silently
@@ -2079,7 +2102,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 				s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
 			}
 		}
-		return
+		return nil
 	}
 
 	// A completed turn with no text, no reasoning, and no tool
@@ -2095,7 +2118,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		}); err != nil {
 			s.logger.Error("persist turn failed", "session_id", sessionID, "error", err)
 		}
-		return
+		return nil
 	}
 
 	// Models occasionally restate their entire answer after a late
@@ -2149,13 +2172,14 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	// follow-up message can arrive within seconds, and its projection
 	// must see this turn completed (not a phantom interruption from a
 	// stale checkpoint). Distillation is an LLM call: it lands later
-	// as its own turn_memory event, never on this write's clock.
+	// as its own turn_memory event from the post-turn job (D-175),
+	// never on this write's clock.
 	wctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
 	turnSeq, err := s.log.Append(wctx, sessionID, session.KindAssistantTurn, turn)
 	if err != nil {
 		s.logger.Error("persist assistant turn", "session_id", sessionID, "error", err)
-		return
+		return nil
 	}
 	if err := s.log.SetLastRoute(wctx, sessionID, route, profile.Name); err != nil {
 		s.logger.Warn("persist last category", "session_id", sessionID, "error", err)
@@ -2165,57 +2189,16 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 	// already session-pinned route (a PRIOR turn's sensitive content is
 	// still in this turn's context: see runTurn's sessionSensitive),
 	// pins its side-calls to the same route the loop/pin already forced
-	// the turn onto: both distillation and extraction below can see raw
-	// sensitive output (e.g. email), so neither may fall back to its own
-	// cheap default.
+	// the turn onto: distillation, extraction and the title can all see
+	// raw sensitive output (e.g. email), so none may fall back to its
+	// own cheap default.
 	sensitiveRoute := ""
 	if sensitive && s.sensitive != nil && s.sensitive.Route != nil {
 		sensitiveRoute = s.sensitive.Route(context.Background())
 	}
 
-	var tm *session.TurnMemory
-	if s.distill != nil && text != "" {
-		dctx, dcancel := context.WithTimeout(context.Background(), distillBudget)
-		tm = s.distill(dctx, sessionID, "user: "+userText+"\n\nassistant: "+text, sensitiveRoute)
-		dcancel()
-		if tm != nil && (len(tm.FilesChanged) > 0 || len(tm.Failures) > 0 || len(tm.KeyFindings) > 0) {
-			mctx, mcancel := context.WithTimeout(context.Background(), persistTimeout)
-			if _, err := s.log.Append(mctx, sessionID, session.KindTurnMemory, session.TurnMemoryEvent{
-				TurnSeq: turnSeq, TurnMemory: *tm,
-			}); err != nil {
-				s.logger.Warn("persist turn memory", "session_id", sessionID, "error", err)
-			}
-			mcancel()
-		}
-	}
-
-	// Long-term memory extraction rides the same residue (D-007): the
-	// user's words plus the distilled turn, never the raw trace. It
-	// runs on every COMPLETED turn even when the assistant produced no
-	// text (some providers end tool turns without a message): the
-	// user's words alone can carry facts. Detached context: the turn
-	// is already over.
-	if s.memory != nil && profile.Memory {
-		mtext := "user: " + userText
-		if tm != nil {
-			if residue, err := json.Marshal(tm); err == nil {
-				mtext += "\n\nturn residue: " + string(residue)
-			}
-		} else if text != "" {
-			mtext += "\n\nassistant: " + text
-		}
-		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute, memoryContents)
-	}
-
-	if s.compactor != nil {
-		cctx, cancel := context.WithTimeout(context.Background(), compactBudget)
-		if err := s.compactor.MaybeCompact(cctx, sessionID); err != nil {
-			s.logger.Error("compaction", "session_id", sessionID, "error", err)
-		}
-		cancel()
-	}
-	if needsTitle {
-		s.autoTitle(sessionID, userText, text, sensitiveRoute)
+	return func(ctx context.Context) {
+		s.postTurn(ctx, sessionID, userText, profile, needsTitle, text, turnSeq, sensitiveRoute, memoryContents)
 	}
 }
 
@@ -2229,10 +2212,14 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 // staying on the default role's route whenever this turn (or an
 // earlier one this session) is sensitive. An empty sensitiveRoute (the
 // common case) falls through to the default role's route exactly as
-// before.
-func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
-	ctx, cancel := context.WithTimeout(context.Background(), titleTimeout)
+// before. ctx is the post-turn job's (D-175): a later turn's job can
+// find the title an earlier job already set, and skips the call.
+func (s *Service) autoTitle(ctx context.Context, sessionID, userText, reply, sensitiveRoute string) {
+	ctx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
+	if meta, err := s.log.Get(ctx, sessionID); err == nil && meta.Title != "" {
+		return
+	}
 
 	const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
 	input := userText + "\n\n" + truncateRunes(reply, 200)

@@ -659,6 +659,73 @@ func TestTurnMemoryEventProjectsAsOwnMessage(t *testing.T) {
 	}
 }
 
+// TestLateTurnMemoryAfterNextTurnStarted pins D-175 projection safety:
+// when a previous turn's turn_memory lands after the next turn's
+// user_message (or even alongside a live pending_state), LLMContext
+// still projects cleanly without rewriting earlier messages or
+// superseding the live pending state.
+func TestLateTurnMemoryAfterNextTurnStarted(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name           string
+		events         []Event
+		wantPrefixMsgs int
+		wantRoles      []string
+	}{
+		{
+			name: "after next user message and assistant turn",
+			events: []Event{
+				user(t, 1, "fix the bug"),
+				assistant(t, 2, "done", nil),
+				user(t, 3, "now test it"),
+				ev(t, 4, KindTurnMemory, TurnMemoryEvent{TurnSeq: 2, TurnMemory: TurnMemory{KeyFindings: []string{"nil map"}}}),
+				assistant(t, 5, "tests pass", nil),
+			},
+			wantPrefixMsgs: 3,
+			wantRoles:      []string{"user", "assistant", "user", "user", "assistant"},
+		},
+		{
+			name: "alongside live pending state",
+			events: []Event{
+				user(t, 1, "fix the bug"),
+				assistant(t, 2, "done", nil),
+				user(t, 3, "now test it"),
+				ev(t, 4, KindPendingState, PendingState{Partial: "running"}),
+				ev(t, 5, KindTurnMemory, TurnMemoryEvent{TurnSeq: 2, TurnMemory: TurnMemory{KeyFindings: []string{"nil map"}}}),
+			},
+			wantPrefixMsgs: 3,
+			wantRoles:      []string{"user", "assistant", "user", "assistant", "user"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prefix, err := LLMContext(tc.events[:3], 0)
+			if err != nil {
+				t.Fatalf("LLMContext prefix: %v", err)
+			}
+			got, err := LLMContext(tc.events, 0)
+			if err != nil {
+				t.Fatalf("LLMContext: %v", err)
+			}
+			if len(got) != len(tc.wantRoles) {
+				t.Fatalf("len(msgs) = %d, want %d (%+v)", len(got), len(tc.wantRoles), got)
+			}
+			for i := 0; i < tc.wantPrefixMsgs; i++ {
+				if !reflect.DeepEqual(got[i], prefix[i]) {
+					t.Fatalf("prefix rewritten at %d: got %+v, want %+v", i, got[i], prefix[i])
+				}
+			}
+			for i, role := range tc.wantRoles {
+				if got[i].Role != role {
+					t.Fatalf("msg[%d].Role = %q, want %q", i, got[i].Role, role)
+				}
+			}
+		})
+	}
+}
+
 // controlOf mirrors Store.TranscriptControl: only the control kinds,
 // payloads kept only where the projection decodes them.
 func controlOf(events []Event) []Event {
