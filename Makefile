@@ -228,7 +228,14 @@ kind-up:
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --config deploy/kind/cluster.yaml --name $(KIND_CLUSTER) --wait 120s
 	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/kind/sandbox.yaml
 	docker image inspect $(KIND_TEST_IMAGE) >/dev/null 2>&1 || docker pull $(KIND_TEST_IMAGE)
-	kind load docker-image $(KIND_TEST_IMAGE) --name $(KIND_CLUSTER)
+	@arch=$$(uname -m); case "$$arch" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; esac; \
+	if docker save --help | grep -q -- '--platform'; then \
+		dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+		docker save --platform "linux/$$arch" "$(KIND_TEST_IMAGE)" -o "$$dir/image.tar" && \
+		kind load image-archive "$$dir/image.tar" --name "$(KIND_CLUSTER)"; \
+	else \
+		kind load docker-image "$(KIND_TEST_IMAGE)" --name "$(KIND_CLUSTER)"; \
+	fi
 	@if docker image inspect $(SANDBOX_IMAGE) >/dev/null 2>&1; then kind load docker-image $(SANDBOX_IMAGE) --name $(KIND_CLUSTER); \
 	else echo "kind-up: $(SANDBOX_IMAGE) not built; run make sandbox-image before make kind-sandbox-smoke"; fi
 
