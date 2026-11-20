@@ -630,7 +630,7 @@ func TestChatHistoryComesFromProjection(t *testing.T) {
 	}
 	drain(t, ch)
 
-	msgs := gw.lastRequest().Messages
+	msgs := gw.lastChatRequest().Messages
 	if len(msgs) != 3 {
 		t.Fatalf("second request messages = %d, want 3: %+v", len(msgs), msgs)
 	}
@@ -1539,7 +1539,7 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	}
 	drain(t, ch)
 
-	msgs := gw.lastRequest().Messages
+	msgs := gw.lastChatRequest().Messages
 	if len(msgs) != 2 {
 		t.Fatalf("wire messages = %+v, want [summary, new question]", msgs)
 	}
