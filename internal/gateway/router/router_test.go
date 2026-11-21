@@ -504,6 +504,22 @@ func TestResolveDetailAllowsModelOnChatDriver(t *testing.T) {
 		BaseURL: "https://api.openai.com/v1"}, "gpt-5.3-codex") {
 		t.Fatalf("responsesOnly = true, want false for the removed openai-responses driver")
 	}
+
+	// 5. gpt-6.1-sol stays mode=chat in LiteLLM but still needs Responses
+	// for function tools — pin the name-based gate so catalog lag cannot
+	// leave Sol on the broken chat/completions path.
+	openaiRow := ProviderRow{Name: "openai", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://api.openai.com/v1"}
+	if !snap.responsesOnly(openaiRow, "gpt-6.1-sol") {
+		t.Fatalf("responsesOnly(gpt-6.1-sol) = false, want true")
+	}
+	if snap.responsesOnly(openaiRow, "gpt-6-luna") {
+		t.Fatalf("responsesOnly(gpt-6-luna) = true, want false (chat + none still works)")
+	}
+	if snap.responsesOnly(ProviderRow{Name: "openrouter", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://openrouter.ai/api/v1"}, "gpt-6.1-sol") {
+		t.Fatalf("responsesOnly on openrouter = true, want false (host gate)")
+	}
 }
 
 // TestResolveVisionRejectsModelDeclaringOnlyChat confirms a catalog

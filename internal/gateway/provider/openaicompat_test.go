@@ -664,6 +664,82 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// TestOpenAICompat400ToolsRetryViaResponses pins the Sol/Astra path:
+// chat/completions returns 400 naming /v1/responses (often while a
+// reasoning_effort field is also present). Prefer the Responses retry
+// over stripping reasoning_effort, and drop a forced "none" override
+// those models reject.
+func TestOpenAICompat400ToolsRetryViaResponses(t *testing.T) {
+	t.Parallel()
+	var chatCalls, responsesCalls atomic.Int32
+	var gotOverride string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			chatCalls.Add(1)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."}}`))
+		case "/v1/responses":
+			responsesCalls.Add(1)
+			got := decodeORSRequest(t, r)
+			if got.Reasoning != nil {
+				gotOverride = got.Reasoning.Effort
+			}
+			orsWrite(w, "response.output_text.delta", `{"delta":"ok"}`)
+			orsWrite(w, "response.completed", `{"response":{"id":"resp_1","status":"completed"}}`)
+		default:
+			http.Error(w, "wrong path "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+
+	p := NewOpenAICompat(OpenAICompatConfig{
+		Name: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test",
+		Timeout: 10 * time.Second,
+	})
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	p.client = &http.Client{Transport: transport}
+	p.responses.client = &http.Client{Transport: transport}
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{
+		Model:                   "gpt-6.1-sol",
+		Effort:                  "low",
+		ReasoningEffortOverride: "none",
+		Messages:                []Message{{Role: "user", Content: "hi"}},
+		Tools: []ToolDef{{
+			Name: "ping", Description: "ping",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if chatCalls.Load() != 1 {
+		t.Fatalf("chat/completions calls = %d, want 1", chatCalls.Load())
+	}
+	if responsesCalls.Load() != 1 {
+		t.Fatalf("/responses calls = %d, want 1 (retry via Responses, not strip)", responsesCalls.Load())
+	}
+	if gotOverride != "low" {
+		t.Fatalf("responses reasoning.effort = %q, want low (none override cleared)", gotOverride)
+	}
+	if got := textOf(events, stream.EventChunk); got != "ok" {
+		t.Fatalf("chunks = %q, want ok", got)
+	}
+	if len(eventsOfType(events, stream.EventError)) != 0 {
+		t.Fatalf("want no error after responses retry: %+v", events)
+	}
+}
+
 func TestOpenAICompatAutoSwitchesToResponsesEndpoint(t *testing.T) {
 	t.Parallel()
 	var gotPath string

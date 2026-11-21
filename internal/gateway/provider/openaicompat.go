@@ -234,6 +234,12 @@ func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-cha
 		return nil, fmt.Errorf("openaicompat: model is required")
 	}
 	if o.responses != nil && o.shouldUseResponses(req) {
+		// Sol/Astra reject reasoning_effort=none (and Responses maps
+		// none→minimal, which they also reject). Drop the override so
+		// the request Effort dial (or the model default) applies.
+		if req.ReasoningEffortOverride == "none" {
+			req.ReasoningEffortOverride = ""
+		}
 		return o.responses.Stream(ctx, req)
 	}
 	wire := o.buildRequest(req)
@@ -287,16 +293,17 @@ func retryOn400(ctx context.Context, o *OpenAICompat, req CompletionRequest, wir
 			return
 		}
 		if isHTTP400(ev) {
-			// Two known 400 shapes, mutually exclusive per backend: OpenAI's
-			// reasoning models reject max_tokens (the error names the
-			// replacement field) regardless of whether reasoning_effort was
-			// sent; everything else here is the Ollama-style
-			// reasoning_effort rejection, which only applies when that field
-			// was actually on the request. Mutate only what the error asked
-			// for, so the other knob survives the retry; if neither
-			// condition matches, there's nothing safe to retry.
+			// Known 400 shapes. Prefer the fix the error names; only fall
+			// through to the Ollama-style reasoning_effort strip when the
+			// body does not ask for /v1/responses (stripping first would
+			// hide Sol/Astra tool failures behind a second chat 400).
 			if ev.Err != nil && strings.Contains(ev.Err.Message, "max_completion_tokens") {
 				retryMaxCompletionTokens(ctx, o, req, wire, out)
+				return
+			}
+			if ev.Err != nil && strings.Contains(ev.Err.Message, "/v1/responses") &&
+				o.responses != nil && isOpenAIHost(o.cfg.BaseURL) {
+				retryViaResponses(ctx, o, req, out)
 				return
 			}
 			if wire.ReasoningEffort != "" {
@@ -352,6 +359,27 @@ func retryReasoningEffortStripped(ctx context.Context, o *OpenAICompat, req Comp
 	}
 	retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
 	for ev := range retry {
+		if !emit(ctx, out, ev) {
+			return
+		}
+	}
+}
+
+// retryViaResponses reissues the turn on the Responses API after
+// chat/completions rejected tools (OpenAI's gpt-6.1-sol / gpt-6-astra
+// family). Drop a forced reasoning_effort=none override: those models
+// reject "none" as well.
+func retryViaResponses(ctx context.Context, o *OpenAICompat, req CompletionRequest, out chan<- stream.StreamEvent) {
+	req.ResponsesMode = true
+	if req.ReasoningEffortOverride == "none" {
+		req.ReasoningEffortOverride = ""
+	}
+	ch, err := o.responses.Stream(ctx, req)
+	if err != nil {
+		emit(ctx, out, errEvent(err, o.cfg.Timeout))
+		return
+	}
+	for ev := range ch {
 		if !emit(ctx, out, ev) {
 			return
 		}
