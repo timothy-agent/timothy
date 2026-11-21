@@ -559,10 +559,36 @@ func (s *Snapshot) responsesOnly(row ProviderRow, model string) bool {
 	if row.Driver != "openaicompat" || !catalog.IsOpenAIHost(row.BaseURL) {
 		return false
 	}
+	// OpenAI docs: GPT-6 Astra / GPT-6.1 Sol (and later Sol/Astra
+	// snaps) reject function tools on /v1/chat/completions. LiteLLM
+	// still labels them mode=chat, so the catalog check below would
+	// miss them and leave chat on the broken path.
+	if openAIChatToolsNeedResponses(model) {
+		return true
+	}
 	if m, ok := s.catalogModel(row, model); ok {
 		return m.Mode == "responses"
 	}
 	return strings.Contains(strings.ToLower(model), "codex")
+}
+
+// openAIChatToolsNeedResponses names the OpenAI chat models that still
+// accept /v1/chat/completions for plain text but require /v1/responses
+// whenever function tools are present. Keep this list short and
+// name-based: catalog mode lags the API docs.
+func openAIChatToolsNeedResponses(model string) bool {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "gpt-6.1-sol"),
+		strings.Contains(m, "gpt-6.2-sol"),
+		strings.Contains(m, "gpt-6-sol"),
+		strings.Contains(m, "gpt-6.1-astra"),
+		strings.Contains(m, "gpt-6.2-astra"),
+		strings.Contains(m, "gpt-6-astra"):
+		return true
+	default:
+		return false
+	}
 }
 
 // ResponsesMode reports whether (providerName, model) should dispatch
