@@ -12,7 +12,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/containerd/errdefs v1.0.0
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
-	github.com/emersion/go-imap/v2 v2.0.0-beta.8
+	github.com/emersion/go-imap/v2 v2.0.0-beta.9
 	github.com/emersion/go-message v0.18.2
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/moby/moby/api v1.56.1
